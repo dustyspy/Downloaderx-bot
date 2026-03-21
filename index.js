@@ -5,96 +5,72 @@ import { makeWASocket, DisconnectReason, initAuthCreds } from 'atexovi-baileys';
 import pino from 'pino';
 import chalk from 'chalk';
 import dotenv from 'dotenv';
-import admin from 'firebase-admin';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 import { handler } from './src/handler.js';
 import { wrapSendMessageGlobally } from './src/utils/typing.js';
 
 dotenv.config();
 
-// =======================
-// 🔥 FIREBASE DIRECT CONFIG
-// =======================
-const serviceAccount = {
-  "type": "service_account",
-  "project_id": "downloaderx-wa-code",
-  "private_key_id": "acf82fecbbde1f8110f85394dc97d2179db97e7b",
-  "private_key": `-----BEGIN PRIVATE KEY-----
-MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCqKq1KHBVsVSf2
-TYBd/tdeNQndyb5K+5paHEHvcS84OxJ/KgXiXI4h5QUHkz4fKOCeb3OQCa5bRNjc
-Sn/qvWr27PGJEzNFzH8qunNhImdhnPeKEkcLPecPti6OAbtiXpW2v3lwPShDKBBK
-6R4n315UljJEaMWT6QKC16U9UM2veXoGVrTvsnH0KCIbpT3p0d3mEij2vNJC4G6k
-af7h/hVNelDLeAvyKYTSeJp3WMDkkcMAJtAZr9de5SuxJJSE9gzvECxTPrkjgvnU
-A8hNWvG9daP/FxUAEkVpABzsgml41j7onrx7uYOy+VdlxAa6IwhC5uuUU+NYmLtD
-ZfhzDzJPAgMBAAECggEAAoNSf3uDsM+0dorgIEM7sKdNh9TLYSBvFUaWjgUuDSwI
-0rpET6VN71/fn6Quhizx3ZUdb/Kcpw9mDnbGhdPEnnSS/+hkg52Iq+Zd/tYQZcd4
-0QqtDumb8xud0Li404k8YnBYcu5hnQBHS/vpAe4RXrlrG58vz8aLTsha0dl9eB+9
-H4wJ4apYAY3Jkmu26dcwGW39dF0IsWimClwi/+q7Ce4JVQ8JnJqjpW+45gVefXT7
-dd5a8OAOCUx68sSDfufgje8mC92B3OZiToGIvZ6rsvP9qyfUwImwLpeBjstXm4Ns
-oGa1bbdDPu0ubr81qm27d7XI6zlFI0x9bKa8pIndTQKBgQDch6Lt5wIFCHI4Ckcy
-MisyboO/q66+SxAsv/V46XKodSZPJmXypRz/miUfPnZuMnxSZgsekZQ9dly9QSpL
-9mHl8WC4crZdJ5chkSmciTiEemtSMJs/jJehXiY7SmDq9g5oLlG//NDzFb+JlisW
-UaounSTab+zkrricJkRT9vcb7QKBgQDFiVP0yLTrvEk2Us0u4ebI7blK00ejQi6n
-/YleUxPsVvayqfRXM9quulKZZmWau2SYAlRCr5CU1U6/T7e752YjbQikJWxC1hNK
-P87zyCtshhZHRpITsHbKlic141CDtPwWFF2E3qdq9bkdI2iwfiUHSlkF5fjzqxN3
-HRa4S0pXqwKBgGbQLZuwaXajO2z5DbxPO2hlsbK4fd1l7YKPdAgM/lGfXF7mTf1U
-ETLxUIFCg8BYdTGNNX3o7S3CcvYg3XFQys+DO06C3JaNkJ4rqTS7nMfWsxY8ZwS3
-rTGkTTqzMIAaexkDD0XsvhW2e/fPNQNQy4Cz7qyQJedvtc3G4XAr4YT5AoGAbItl
-ouCW6eJwqHUfYl+nnUljxAYNG1zGnnDnBvnHvNqcfNh+91v7EoA32ys1Ma0/PXgq
-LOqkG+SKfP2lDI++xECpuukFcESKHQarBbI8ikmz/D5/DmqtG+0eZrIeEAFndAqE
-yPpALLoRmj1WzYTDfBoSiPcxsVOUQqOtVF+q3jkCgYEAoCMdC7qULrQ/Yzr8gVP2
-jcFRiqzB13eEAF5HjIC6N8gO+Zj4mCvLVSULr4WNqNxabMlHKi3nAbqk2HmNaQ1L
-q2QZOrEh3qM7Z7RLwyyVI2INUNczlD9aU7gKwFglQtPPDHKrZha0xURsn8MRwRZI
-UPzds2xmpfHfdHIhco2q+tQ=
------END PRIVATE KEY-----`,
-  "client_email": "firebase-adminsdk-fbsvc@downloaderx-wa-code.iam.gserviceaccount.com"
-};
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://downloaderx-wa-code-default-rtdb.firebaseio.com"
-});
-
-const db = admin.database();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // =======================
-// 🔥 EXPRESS
+// 🔥 JSON FILE STORAGE (Firebase Alternative)
 // =======================
-const app = express();
-app.use(express.json());
+const STORAGE_FILE = path.join(__dirname, 'sessions.json');
 
-const PORT = process.env.PORT || 3000;
-
-// =======================
-// 🔥 MEMORY SESSION
-// =======================
-const sessions = {};
-
-// =======================
-// 🔥 FIREBASE AUTH STATE (FIXED)
-// =======================
-async function useFirebaseAuthState(uid) {
-    const ref = db.ref(`sessions/${uid}/creds`);
-
-    let credsSnap = await ref.get();
-    let creds = credsSnap.val();
-
-    if (!creds) {
-        creds = initAuthCreds();
-        await ref.set(creds);
+// Load sessions from file
+function loadSessions() {
+    try {
+        if (fs.existsSync(STORAGE_FILE)) {
+            const data = fs.readFileSync(STORAGE_FILE, 'utf8');
+            return JSON.parse(data);
+        }
+    } catch (err) {
+        console.log('Error loading sessions:', err);
     }
+    return {};
+}
 
-    const keysRef = db.ref(`sessions/${uid}/keys`);
+// Save sessions to file
+function saveSessions(sessions) {
+    try {
+        fs.writeFileSync(STORAGE_FILE, JSON.stringify(sessions, null, 2));
+    } catch (err) {
+        console.log('Error saving sessions:', err);
+    }
+}
 
+// =======================
+// 🔥 AUTH STATE (JSON File Based)
+// =======================
+async function useFileAuthState(uid) {
+    const sessions = loadSessions();
+    
+    if (!sessions[uid]) {
+        sessions[uid] = {
+            creds: initAuthCreds(),
+            keys: {},
+            number: null,
+            createdAt: Date.now()
+        };
+        saveSessions(sessions);
+    }
+    
+    const userSession = sessions[uid];
+    
     return {
         state: {
-            creds,
+            creds: userSession.creds,
             keys: {
                 get: async (type, ids) => {
                     const data = {};
                     for (const id of ids) {
-                        let snap = await keysRef.child(`${type}-${id}`).get();
-                        let value = snap.val();
+                        const key = `${type}-${id}`;
+                        let value = userSession.keys[key];
                         if (value && type === 'app-state-sync-key') {
                             try {
                                 value = Buffer.from(value, 'base64');
@@ -114,32 +90,49 @@ async function useFirebaseAuthState(uid) {
                                 value = value.toString('base64');
                             }
                             if (value) {
-                                await keysRef.child(`${type}-${id}`).set(value);
+                                userSession.keys[`${type}-${id}`] = value;
                             } else {
-                                await keysRef.child(`${type}-${id}`).remove();
+                                delete userSession.keys[`${type}-${id}`];
                             }
                         }
                     }
+                    saveSessions(sessions);
                 }
             }
         },
         saveCreds: async (newCreds) => {
-            await ref.set(newCreds);
+            userSession.creds = newCreds;
+            saveSessions(sessions);
         }
     };
 }
 
 // =======================
+// 🔥 EXPRESS
+// =======================
+const app = express();
+app.use(express.json());
+
+const PORT = process.env.PORT || 3000;
+
+// =======================
+// 🔥 MEMORY SESSION
+// =======================
+const activeSessions = {};
+
+// =======================
 // 🔥 CREATE BOT
 // =======================
 async function createBot(uid) {
-    if (sessions[uid]) return sessions[uid];
+    if (activeSessions[uid]) return activeSessions[uid];
 
-    const { state, saveCreds } = await useFirebaseAuthState(uid);
+    const { state, saveCreds } = await useFileAuthState(uid);
 
     const sock = makeWASocket({
         auth: state,
         logger: pino({ level: 'silent' }),
+        printQRInTerminal: false,
+        browser: ['MAINUL-X BOT', 'Chrome', '120.0.0.0']
     });
 
     wrapSendMessageGlobally(sock);
@@ -161,12 +154,12 @@ async function createBot(uid) {
             if (reason !== DisconnectReason.loggedOut) {
                 console.log(chalk.yellow(`🔁 Reconnecting ${uid}...`));
                 setTimeout(() => {
-                    delete sessions[uid];
+                    delete activeSessions[uid];
                     createBot(uid);
                 }, 3000);
             } else {
                 console.log(chalk.red(`❌ ${uid} logged out`));
-                delete sessions[uid];
+                delete activeSessions[uid];
             }
         }
     });
@@ -181,7 +174,7 @@ async function createBot(uid) {
         }
     });
 
-    sessions[uid] = sock;
+    activeSessions[uid] = sock;
     return sock;
 }
 
@@ -189,9 +182,8 @@ async function createBot(uid) {
 // 🔥 RESTORE SESSIONS
 // =======================
 async function restoreSessions() {
-    const snap = await db.ref("sessions").get();
-    if (!snap.exists()) return;
-    const users = Object.keys(snap.val());
+    const sessions = loadSessions();
+    const users = Object.keys(sessions);
     console.log(chalk.cyan(`♻️ Restoring ${users.length} sessions...`));
     for (const uid of users) {
         try {
@@ -206,18 +198,127 @@ async function restoreSessions() {
 // 🔥 ROOT
 // =======================
 app.get('/', (req, res) => {
-    const total = Object.keys(sessions).length;
-    const connected = Object.values(sessions).filter(s => s.user?.id).length;
+    const total = Object.keys(activeSessions).length;
+    const connected = Object.values(activeSessions).filter(s => s.user?.id).length;
+    const sessions = loadSessions();
+    const totalUsers = Object.keys(sessions).length;
+    
     res.send(`
+    <!DOCTYPE html>
     <html>
-    <body style="background:#0f0c29;color:white;text-align:center;padding:40px;">
-        <h1>🤖 MAINUL-X BOT</h1>
-        <p style="color:#00ff88;">● RUNNING</p>
-        <p>👥 Users: ${total}</p>
-        <p>🤖 Connected: ${connected}</p>
-        <hr>
-        <p>🔥 Firebase Session Active</p>
-        <p>👨‍💻 MAINUL - X</p>
+    <head>
+        <title>MAINUL-X BOT</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body {
+                background: linear-gradient(135deg, #0f0c29 0%, #1a1a2e 50%, #16213e 100%);
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: white;
+            }
+            .card {
+                background: rgba(255,255,255,0.1);
+                backdrop-filter: blur(10px);
+                border-radius: 24px;
+                padding: 40px;
+                text-align: center;
+                border: 1px solid rgba(255,255,255,0.2);
+                box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+                max-width: 500px;
+                width: 90%;
+            }
+            h1 {
+                background: linear-gradient(135deg, #fff, #00d4ff);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                font-size: 28px;
+                margin-bottom: 20px;
+            }
+            .status {
+                color: #00ff88;
+                font-size: 18px;
+                margin: 20px 0;
+            }
+            .stats {
+                display: flex;
+                justify-content: space-around;
+                margin: 30px 0;
+            }
+            .stat {
+                text-align: center;
+            }
+            .stat-value {
+                font-size: 32px;
+                font-weight: bold;
+                color: #00d4ff;
+            }
+            .stat-label {
+                font-size: 12px;
+                color: rgba(255,255,255,0.6);
+            }
+            .footer {
+                margin-top: 30px;
+                font-size: 12px;
+                color: rgba(255,255,255,0.4);
+            }
+            .badge {
+                display: inline-block;
+                background: rgba(0,212,255,0.2);
+                padding: 5px 12px;
+                border-radius: 20px;
+                font-size: 12px;
+                margin: 5px;
+            }
+            hr {
+                border-color: rgba(255,255,255,0.1);
+                margin: 20px 0;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>🤖 MAINUL-X BOT</h1>
+            <div class="status">● ONLINE</div>
+            
+            <div class="stats">
+                <div class="stat">
+                    <div class="stat-value">${totalUsers}</div>
+                    <div class="stat-label">Total Users</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value">${connected}</div>
+                    <div class="stat-label">Connected</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value">${total}</div>
+                    <div class="stat-label">Active Sessions</div>
+                </div>
+            </div>
+            
+            <div>
+                <span class="badge">📱 WhatsApp Bot</span>
+                <span class="badge">🎬 YouTube</span>
+                <span class="badge">📘 Facebook</span>
+                <span class="badge">📸 Instagram</span>
+                <span class="badge">🎵 TikTok</span>
+            </div>
+            
+            <hr>
+            
+            <p style="font-size: 14px; margin: 15px 0;">
+                🔥 <strong>MAINUL - X DOWNLOADER</strong><br>
+                Download videos from any platform
+            </p>
+            
+            <div class="footer">
+                <p>© 2026 MAINUL - X | All Rights Reserved</p>
+                <p style="font-size: 10px;">📱 Pair via API: POST /pair</p>
+            </div>
+        </div>
     </body>
     </html>
     `);
@@ -227,11 +328,11 @@ app.get('/', (req, res) => {
 // ❤️ HEALTH
 // =======================
 app.get('/health', (req, res) => {
-    res.json({ status: "ok" });
+    res.json({ status: "ok", timestamp: Date.now() });
 });
 
 // =======================
-// 🔥 PAIR API (FIXED)
+// 🔥 PAIR API
 // =======================
 app.post('/pair', async (req, res) => {
     try {
@@ -242,28 +343,28 @@ app.post('/pair', async (req, res) => {
         }
 
         const cleanNumber = number.replace(/[^0-9]/g, '');
-
-        // Check if number already connected
-        const snapshot = await db.ref('sessions').once('value');
+        
+        // Check if number already exists
+        const sessions = loadSessions();
         let alreadyConnected = false;
-        if (snapshot.exists()) {
-            const sessionsData = snapshot.val();
-            for (const key in sessionsData) {
-                if (sessionsData[key]?.number === cleanNumber) {
-                    alreadyConnected = true;
-                    break;
-                }
+        let existingUid = null;
+        
+        for (const [key, session] of Object.entries(sessions)) {
+            if (session.number === cleanNumber) {
+                alreadyConnected = true;
+                existingUid = key;
+                break;
             }
         }
-
+        
         if (alreadyConnected) {
             return res.json({
                 success: false,
-                msg: "This number is already connected ❌"
+                msg: `This number is already connected with UID: ${existingUid} ❌`
             });
         }
 
-        let sock = sessions[uid];
+        let sock = activeSessions[uid];
         if (!sock) {
             sock = await createBot(uid);
         }
@@ -275,8 +376,19 @@ app.post('/pair', async (req, res) => {
         const code = await sock.requestPairingCode(cleanNumber);
         console.log(chalk.green(`📱 Pairing code for ${cleanNumber}: ${code}`));
 
-        // Save number to Firebase
-        await db.ref(`sessions/${uid}/number`).set(cleanNumber);
+        // Save number to session
+        const allSessions = loadSessions();
+        if (!allSessions[uid]) {
+            allSessions[uid] = {
+                creds: allSessions[uid]?.creds || initAuthCreds(),
+                keys: allSessions[uid]?.keys || {},
+                number: cleanNumber,
+                createdAt: Date.now()
+            };
+        } else {
+            allSessions[uid].number = cleanNumber;
+        }
+        saveSessions(allSessions);
 
         return res.json({
             success: true,
@@ -295,22 +407,71 @@ app.post('/pair', async (req, res) => {
 // =======================
 app.post('/status', (req, res) => {
     const { uid } = req.body;
-    if (!sessions[uid]) {
+    if (!activeSessions[uid]) {
         return res.json({ connected: false });
     }
     return res.json({
-        connected: !!sessions[uid].user?.id
+        connected: !!activeSessions[uid].user?.id,
+        uid: uid
     });
+});
+
+// =======================
+// 🔥 LIST ALL SESSIONS
+// =======================
+app.get('/sessions', (req, res) => {
+    const sessions = loadSessions();
+    const data = {};
+    for (const [uid, session] of Object.entries(sessions)) {
+        data[uid] = {
+            number: session.number,
+            connected: !!activeSessions[uid]?.user?.id,
+            createdAt: session.createdAt
+        };
+    }
+    res.json(data);
+});
+
+// =======================
+// 🔥 DELETE SESSION
+// =======================
+app.delete('/session/:uid', (req, res) => {
+    const { uid } = req.params;
+    const sessions = loadSessions();
+    
+    if (sessions[uid]) {
+        delete sessions[uid];
+        saveSessions(sessions);
+        
+        if (activeSessions[uid]) {
+            activeSessions[uid].end();
+            delete activeSessions[uid];
+        }
+        
+        res.json({ success: true, msg: `Session ${uid} deleted` });
+    } else {
+        res.json({ success: false, msg: "Session not found" });
+    }
 });
 
 // =======================
 // 🚀 START SERVER
 // =======================
 app.listen(PORT, async () => {
-    console.log(chalk.cyan(`\n🚀 MAINUL-X SERVER RUNNING ON PORT ${PORT}`));
-    console.log(chalk.yellow(`📱 Pair API: POST /pair`));
-    console.log(chalk.yellow(`📊 Status: GET /health`));
-    console.log(chalk.green(`\n✅ Firebase Connected`));
+    console.log(chalk.cyan(`
+╔══════════════════════════════════════════════════╗
+║  🔥 MAINUL-X WHATSAPP BOT 🔥                     ║
+║  📡 Server: http://localhost:${PORT}               ║
+║  📱 Pair API: POST /pair                        ║
+║  📊 Status: GET /health                         ║
+║  👤 Sessions: GET /sessions                     ║
+║  ❌ Delete: DELETE /session/:uid                 ║
+╚══════════════════════════════════════════════════╝
+    `));
+    
+    console.log(chalk.green(`\n✅ JSON File Storage Ready`));
+    console.log(chalk.yellow(`📁 Sessions saved to: ${STORAGE_FILE}\n`));
+    
     await restoreSessions();
-    console.log(chalk.cyan(`\n🔥 Bot is ready!\n`));
+    console.log(chalk.cyan(`\n🤖 Bot is ready!\n`));
 });
