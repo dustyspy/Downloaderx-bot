@@ -107,7 +107,33 @@ async function createBot(uid) {
 
     return sock;
 }
+// =======================
+// 🔥 WAIT FOR CONNECTION READY
+// =======================
+function waitForConnection(sock) {
+    return new Promise((resolve, reject) => {
 
+        let done = false;
+
+        const timeout = setTimeout(() => {
+            if (!done) {
+                done = true;
+                reject(new Error("Connection timeout"));
+            }
+        }, 10000); // 10 sec
+
+        sock.ev.on('connection.update', (update) => {
+            const { connection } = update;
+
+            if (connection === 'open' && !done) {
+                done = true;
+                clearTimeout(timeout);
+                resolve();
+            }
+        });
+
+    });
+        }
 // =======================
 // 🔥 ROOT (CHECK SERVER)
 // =======================
@@ -238,11 +264,11 @@ app.post('/pair', async (req, res) => {
         if (sock.user) {
             return res.json({
                 success: false,
-                msg: "Bot already connected"
+                msg: "Already connected"
             });
         }
 
-        // 🔥 FIX HERE
+        // ✅ WAIT READY FIX
         await waitForConnection(sock);
 
         const code = await sock.requestPairingCode(number);
@@ -261,7 +287,6 @@ app.post('/pair', async (req, res) => {
         });
     }
 });
-
 // =======================
 // 🚀 START SERVER
 // =======================
