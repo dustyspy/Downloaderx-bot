@@ -8,7 +8,7 @@ OWNER   : MAINUL - X
 TELEGRAM: @mdmainulislaminfo
 WHATSAPP: +8801308850528
 GITHUB  : https://github.com/M41NUL
-VERSION : 3.0.0
+VERSION : 1.0.0
 ===========================================
 */
 
