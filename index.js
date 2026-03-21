@@ -17,6 +17,9 @@ dotenv.config();
 // =======================
 const serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_KEY);
 
+// 🔥 FIX PRIVATE KEY
+serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: "https://downloaderx-wa-code-default-rtdb.firebaseio.com"
