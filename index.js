@@ -1,19 +1,31 @@
 #!/usr/bin/env node
 
 import express from 'express';
-import { makeWASocket, useMultiFileAuthState, DisconnectReason } from 'atexovi-baileys';
+import { makeWASocket, DisconnectReason } from 'atexovi-baileys';
 import pino from 'pino';
-import fs from 'fs';
-import path from 'path';
 import chalk from 'chalk';
 import dotenv from 'dotenv';
+import admin from 'firebase-admin';
+
 import { handler } from './src/handler.js';
 import { wrapSendMessageGlobally } from './src/utils/typing.js';
 
 dotenv.config();
 
 // =======================
-// 🔥 EXPRESS SERVER
+// 🔥 FIREBASE INIT
+// =======================
+const serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_KEY);
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+  databaseURL: "https://downloaderx-wa-code-default-rtdb.firebaseio.com"
+});
+
+const db = admin.database();
+
+// =======================
+// 🔥 EXPRESS
 // =======================
 const app = express();
 app.use(express.json());
@@ -21,46 +33,78 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 
 // =======================
-// 🔥 MULTI USER STORAGE
+// 🔥 MEMORY SESSION
 // =======================
 const sessions = {};
 
 // =======================
-// 🔥 LOG FILTER
+// 🔥 FIREBASE AUTH STATE
 // =======================
-const originalError = console.error;
-const originalLog = console.log;
+async function useFirebaseAuthState(uid) {
 
-const FILTER_PATTERNS = [
-  'Bad MAC','Failed to decrypt','Closing session','Session error'
-];
+    const ref = db.ref(`sessions/${uid}`);
 
-console.error = function(...args) {
-  const msg = args.join(' ');
-  if (FILTER_PATTERNS.some(p => msg.includes(p))) return;
-  originalError.apply(console, args);
-};
+    let credsSnap = await ref.child('creds').get();
+    let creds = credsSnap.val() || {};
 
-console.log = function(...args) {
-  const msg = args.join(' ');
-  if (FILTER_PATTERNS.some(p => msg.includes(p))) return;
-  originalLog.apply(console, args);
-};
+    return {
+        state: {
+            creds,
+            keys: {
+                get: async (type, ids) => {
+                    const data = {};
+
+                    for (const id of ids) {
+                        let snap = await ref.child(`keys/${type}-${id}`).get();
+                        let value = snap.val();
+
+                        // 🔥 Buffer FIX
+                        if (value && type === 'app-state-sync-key') {
+                            value = Buffer.from(value, 'base64');
+                        }
+
+                        data[id] = value;
+                    }
+
+                    return data;
+                },
+
+                set: async (data) => {
+                    for (const type in data) {
+                        for (const id in data[type]) {
+
+                            let value = data[type][id];
+
+                            // 🔥 Buffer → base64
+                            if (value instanceof Buffer) {
+                                value = value.toString('base64');
+                            }
+
+                            if (value) {
+                                await ref.child(`keys/${type}-${id}`).set(value);
+                            } else {
+                                await ref.child(`keys/${type}-${id}`).remove();
+                            }
+                        }
+                    }
+                }
+            }
+        },
+
+        saveCreds: async () => {
+            await ref.child('creds').set(creds);
+        }
+    };
+}
 
 // =======================
-// 🔥 CREATE BOT (PER USER)
+// 🔥 CREATE BOT
 // =======================
 async function createBot(uid) {
 
-    if (sessions[uid]) return sessions[uid]; // prevent duplicate
+    if (sessions[uid]) return sessions[uid];
 
-    const authDir = path.join(process.cwd(), 'sessions', uid);
-
-    if (!fs.existsSync(authDir)) {
-        fs.mkdirSync(authDir, { recursive: true });
-    }
-
-    const { state, saveCreds } = await useMultiFileAuthState(authDir);
+    const { state, saveCreds } = await useFirebaseAuthState(uid);
 
     const sock = makeWASocket({
         auth: state,
@@ -69,9 +113,12 @@ async function createBot(uid) {
 
     wrapSendMessageGlobally(sock);
 
-    sock.ev.on('creds.update', saveCreds);
+    // 🔥 SAFE SAVE
+    sock.ev.on('creds.update', async () => {
+        await saveCreds();
+    });
 
-    sock.ev.on('connection.update', async (update) => {
+    sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
 
         if (connection === 'open') {
@@ -83,7 +130,7 @@ async function createBot(uid) {
 
             if (reason !== DisconnectReason.loggedOut) {
                 console.log(chalk.yellow(`🔁 Reconnecting ${uid}...`));
-                delete sessions[uid]; // important
+                delete sessions[uid];
                 createBot(uid);
             } else {
                 console.log(chalk.red(`❌ ${uid} logged out`));
@@ -99,7 +146,7 @@ async function createBot(uid) {
         try {
             await handler(sock, msg);
         } catch (err) {
-            console.error("Handler error:", err);
+            console.log("Handler error:", err);
         }
     });
 
@@ -107,131 +154,50 @@ async function createBot(uid) {
 
     return sock;
 }
+
 // =======================
-// 🔥 WAIT FOR CONNECTION READY
+// 🔥 RESTORE SESSIONS
 // =======================
-function waitForConnection(sock) {
-    return new Promise((resolve, reject) => {
+async function restoreSessions() {
 
-        let done = false;
+    const snap = await db.ref("sessions").get();
 
-        const timeout = setTimeout(() => {
-            if (!done) {
-                done = true;
-                reject(new Error("Connection timeout"));
-            }
-        }, 10000); // 10 sec
+    if (!snap.exists()) return;
 
-        sock.ev.on('connection.update', (update) => {
-            const { connection } = update;
+    const users = Object.keys(snap.val());
 
-            if (connection === 'open' && !done) {
-                done = true;
-                clearTimeout(timeout);
-                resolve();
-            }
-        });
+    console.log(`♻️ Restoring ${users.length} sessions...`);
 
-    });
+    for (const uid of users) {
+        try {
+            await createBot(uid);
+        } catch (err) {
+            console.log(`Restore failed for ${uid}`, err);
         }
+    }
+}
+
 // =======================
-// 🔥 ROOT (CHECK SERVER)
+// 🔥 ROOT
 // =======================
 app.get('/', (req, res) => {
+
+    const total = Object.keys(sessions).length;
+    const connected = Object.values(sessions).filter(s => s.user).length;
+
     res.send(`
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>MAINUL-X BOT</title>
+    <html>
+    <body style="background:#0f0c29;color:white;text-align:center;padding:40px;">
+        <h1>🤖 MAINUL-X BOT</h1>
+        <p style="color:#00ff88;">● RUNNING</p>
 
-        <style>
-            body {
-                margin: 0;
-                font-family: 'Segoe UI', sans-serif;
-                background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
-                color: white;
-                text-align: center;
-                padding: 40px;
-            }
+        <p>👥 Users: ${total}</p>
+        <p>🤖 Connected: ${connected}</p>
 
-            .card {
-                background: rgba(255,255,255,0.05);
-                backdrop-filter: blur(10px);
-                padding: 30px;
-                border-radius: 20px;
-                box-shadow: 0 0 30px rgba(0, 212, 255, 0.2);
-                display: inline-block;
-                max-width: 400px;
-            }
+        <hr>
 
-            h1 {
-                color: #00d4ff;
-                margin-bottom: 10px;
-            }
-
-            .status {
-                color: #00ff88;
-                font-weight: bold;
-                margin: 10px 0;
-            }
-
-            .info {
-                margin-top: 20px;
-                font-size: 14px;
-                color: #ccc;
-            }
-
-            .btn {
-                display: inline-block;
-                margin-top: 20px;
-                padding: 10px 20px;
-                border-radius: 10px;
-                background: #00d4ff;
-                color: black;
-                text-decoration: none;
-                font-weight: bold;
-                transition: 0.3s;
-            }
-
-            .btn:hover {
-                background: #00aacc;
-            }
-
-            footer {
-                margin-top: 30px;
-                font-size: 12px;
-                color: #aaa;
-            }
-        </style>
-    </head>
-    <body>
-
-        <div class="card">
-            <h1>🤖 MAINUL - X BOT</h1>
-
-            <p class="status">● SERVER RUNNING</p>
-
-            <hr>
-
-            <p>🚀 Multi User WhatsApp Bot System</p>
-            <p>⚡ Powered by Node.js & Baileys</p>
-
-            <div class="info">
-                <p>👨‍💻 Developer: Md. Mainul Islam</p>
-                <p>📱 WhatsApp: +8801308850528</p>
-                <p>💬 Telegram: @mdmainulislaminfo</p>
-                <p>🐙 GitHub: github.com/M41NUL</p>
-            </div>
-
-            <a href="/health" class="btn">Check API Status</a>
-
-            <footer>
-                © 2026 MAINUL - X | All Rights Reserved
-            </footer>
-        </div>
-
+        <p>🔥 Firebase Session Active</p>
+        <p>👨‍💻 MAINUL - X</p>
     </body>
     </html>
     `);
@@ -262,14 +228,10 @@ app.post('/pair', async (req, res) => {
         }
 
         if (sock.user) {
-            return res.json({
-                success: false,
-                msg: "Already connected"
-            });
+            return res.json({ success: false, msg: "Already connected" });
         }
 
-        // ✅ WAIT READY FIX
-        await waitForConnection(sock);
+        await new Promise(r => setTimeout(r, 500));
 
         const code = await sock.requestPairingCode(number);
 
@@ -287,9 +249,27 @@ app.post('/pair', async (req, res) => {
         });
     }
 });
+
+// =======================
+// 🔥 STATUS API
+// =======================
+app.post('/status', (req, res) => {
+    const { uid } = req.body;
+
+    if (!sessions[uid]) {
+        return res.json({ connected: false });
+    }
+
+    return res.json({
+        connected: !!sessions[uid].user
+    });
+});
+
 // =======================
 // 🚀 START SERVER
 // =======================
-app.listen(PORT, () => {
-    console.log(chalk.cyan(`🚀 MAINUL-X BOT SERVER RUNNING ON PORT ${PORT}`));
+app.listen(PORT, async () => {
+    console.log(chalk.cyan(`🚀 MAINUL-X SERVER RUNNING ON ${PORT}`));
+
+    await restoreSessions(); // 🔥 AUTO LOAD
 });
