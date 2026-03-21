@@ -249,10 +249,24 @@ app.get('/health', (req, res) => {
 // =======================
 app.post('/pair', async (req, res) => {
     try {
-        const { uid, number } = req.body;
+        let { uid, number } = req.body;
 
         if (!uid || !number) {
             return res.json({ success: false, msg: "Missing uid/number" });
+        }
+
+        const cleanNumber = number.replace(/[^0-9]/g, '');
+
+        const snapshot = await db.ref('sessions')
+            .orderByChild('number')
+            .equalTo(cleanNumber)
+            .get();
+
+        if (snapshot.exists()) {
+            return res.json({
+                success: false,
+                msg: "This number is already connected ❌"
+            });
         }
 
         let sock = sessions[uid];
@@ -265,9 +279,10 @@ app.post('/pair', async (req, res) => {
             return res.json({ success: false, msg: "Already connected" });
         }
 
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 2000));
+        const code = await sock.requestPairingCode(cleanNumber);
 
-        const code = await sock.requestPairingCode(number);
+        await db.ref(`sessions/${uid}/number`).set(cleanNumber);
 
         return res.json({
             success: true,
@@ -276,11 +291,7 @@ app.post('/pair', async (req, res) => {
 
     } catch (err) {
         console.log("PAIR ERROR:", err);
-
-        return res.json({
-            success: false,
-            msg: err.message
-        });
+        return res.json({ success: false, msg: err.message });
     }
 });
 
