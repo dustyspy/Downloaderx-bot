@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 
 import express from 'express';
-import { makeWASocket, DisconnectReason, initAuthCreds } from 'atexovi-baileys';
+import { makeWASocket, useMultiFileAuthState, DisconnectReason } from 'atexovi-baileys';
 import pino from 'pino';
-import chalk from 'chalk';
-import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-
+import chalk from 'chalk';
+import dotenv from 'dotenv';
 import { handler } from './src/handler.js';
 import { wrapSendMessageGlobally } from './src/utils/typing.js';
 
@@ -18,115 +17,47 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // =======================
-// 🔥 JSON FILE STORAGE (Firebase Alternative)
-// =======================
-const STORAGE_FILE = path.join(__dirname, 'sessions.json');
-
-// Load sessions from file
-function loadSessions() {
-    try {
-        if (fs.existsSync(STORAGE_FILE)) {
-            const data = fs.readFileSync(STORAGE_FILE, 'utf8');
-            return JSON.parse(data);
-        }
-    } catch (err) {
-        console.log('Error loading sessions:', err);
-    }
-    return {};
-}
-
-// Save sessions to file
-function saveSessions(sessions) {
-    try {
-        fs.writeFileSync(STORAGE_FILE, JSON.stringify(sessions, null, 2));
-    } catch (err) {
-        console.log('Error saving sessions:', err);
-    }
-}
-
-// =======================
-// 🔥 AUTH STATE (JSON File Based)
-// =======================
-async function useFileAuthState(uid) {
-    const sessions = loadSessions();
-    
-    if (!sessions[uid]) {
-        sessions[uid] = {
-            creds: initAuthCreds(),
-            keys: {},
-            number: null,
-            createdAt: Date.now()
-        };
-        saveSessions(sessions);
-    }
-    
-    const userSession = sessions[uid];
-    
-    return {
-        state: {
-            creds: userSession.creds,
-            keys: {
-                get: async (type, ids) => {
-                    const data = {};
-                    for (const id of ids) {
-                        const key = `${type}-${id}`;
-                        let value = userSession.keys[key];
-                        if (value && type === 'app-state-sync-key') {
-                            try {
-                                value = Buffer.from(value, 'base64');
-                            } catch (e) {
-                                value = Buffer.from(value);
-                            }
-                        }
-                        data[id] = value;
-                    }
-                    return data;
-                },
-                set: async (data) => {
-                    for (const type in data) {
-                        for (const id in data[type]) {
-                            let value = data[type][id];
-                            if (value instanceof Buffer) {
-                                value = value.toString('base64');
-                            }
-                            if (value) {
-                                userSession.keys[`${type}-${id}`] = value;
-                            } else {
-                                delete userSession.keys[`${type}-${id}`];
-                            }
-                        }
-                    }
-                    saveSessions(sessions);
-                }
-            }
-        },
-        saveCreds: async (newCreds) => {
-            userSession.creds = newCreds;
-            saveSessions(sessions);
-        }
-    };
-}
-
-// =======================
-// 🔥 EXPRESS
+// 🔥 EXPRESS SERVER
 // =======================
 const app = express();
 app.use(express.json());
-
 const PORT = process.env.PORT || 3000;
 
 // =======================
-// 🔥 MEMORY SESSION
+// 🔥 SESSIONS STORAGE
 // =======================
-const activeSessions = {};
+const sessions = {};
+const authDir = path.join(__dirname, 'sessions');
+
+// Ensure auth directory exists
+if (!fs.existsSync(authDir)) {
+    fs.mkdirSync(authDir, { recursive: true });
+}
+
+// =======================
+// 🔥 FILTER PATTERNS (Clean logs)
+// =======================
+const FILTER_PATTERNS = [
+    'Bad MAC', 'Failed to decrypt message with any known session',
+    'Session error:', 'Failed to decrypt', 'Closing open session',
+    'Closing session:', 'SessionEntry', '_chains:', 'registrationId:',
+    'currentRatchet:', 'indexInfo:', '<Buffer', 'pubKey:', 'privKey:',
+    'baseKey:', 'remoteIdentityKey:', 'lastRemoteEphemeralKey:',
+    'ephemeralKeyPair:', 'chainKey:', 'chainType:', 'messageKeys:'
+];
 
 // =======================
 // 🔥 CREATE BOT
 // =======================
 async function createBot(uid) {
-    if (activeSessions[uid]) return activeSessions[uid];
+    if (sessions[uid]) return sessions[uid];
 
-    const { state, saveCreds } = await useFileAuthState(uid);
+    const userAuthDir = path.join(authDir, uid);
+    if (!fs.existsSync(userAuthDir)) {
+        fs.mkdirSync(userAuthDir, { recursive: true });
+    }
+
+    const { state, saveCreds } = await useMultiFileAuthState(userAuthDir);
 
     const sock = makeWASocket({
         auth: state,
@@ -154,12 +85,12 @@ async function createBot(uid) {
             if (reason !== DisconnectReason.loggedOut) {
                 console.log(chalk.yellow(`🔁 Reconnecting ${uid}...`));
                 setTimeout(() => {
-                    delete activeSessions[uid];
+                    delete sessions[uid];
                     createBot(uid);
                 }, 3000);
             } else {
                 console.log(chalk.red(`❌ ${uid} logged out`));
-                delete activeSessions[uid];
+                delete sessions[uid];
             }
         }
     });
@@ -174,18 +105,20 @@ async function createBot(uid) {
         }
     });
 
-    activeSessions[uid] = sock;
+    sessions[uid] = sock;
     return sock;
 }
 
 // =======================
-// 🔥 RESTORE SESSIONS
+// 🔥 RESTORE ALL SESSIONS
 // =======================
 async function restoreSessions() {
-    const sessions = loadSessions();
-    const users = Object.keys(sessions);
-    console.log(chalk.cyan(`♻️ Restoring ${users.length} sessions...`));
-    for (const uid of users) {
+    if (!fs.existsSync(authDir)) return;
+    
+    const dirs = fs.readdirSync(authDir);
+    console.log(chalk.cyan(`♻️ Restoring ${dirs.length} sessions...`));
+    
+    for (const uid of dirs) {
         try {
             await createBot(uid);
         } catch (err) {
@@ -195,13 +128,11 @@ async function restoreSessions() {
 }
 
 // =======================
-// 🔥 ROOT
+// 🔥 WEB INTERFACE
 // =======================
 app.get('/', (req, res) => {
-    const total = Object.keys(activeSessions).length;
-    const connected = Object.values(activeSessions).filter(s => s.user?.id).length;
-    const sessions = loadSessions();
-    const totalUsers = Object.keys(sessions).length;
+    const total = Object.keys(sessions).length;
+    const connected = Object.values(sessions).filter(s => s.user?.id).length;
     
     res.send(`
     <!DOCTYPE html>
@@ -219,6 +150,7 @@ app.get('/', (req, res) => {
                 align-items: center;
                 justify-content: center;
                 color: white;
+                padding: 20px;
             }
             .card {
                 background: rgba(255,255,255,0.1);
@@ -229,7 +161,7 @@ app.get('/', (req, res) => {
                 border: 1px solid rgba(255,255,255,0.2);
                 box-shadow: 0 8px 32px rgba(0,0,0,0.3);
                 max-width: 500px;
-                width: 90%;
+                width: 100%;
             }
             h1 {
                 background: linear-gradient(135deg, #fff, #00d4ff);
@@ -248,9 +180,6 @@ app.get('/', (req, res) => {
                 justify-content: space-around;
                 margin: 30px 0;
             }
-            .stat {
-                text-align: center;
-            }
             .stat-value {
                 font-size: 32px;
                 font-weight: bold;
@@ -259,6 +188,56 @@ app.get('/', (req, res) => {
             .stat-label {
                 font-size: 12px;
                 color: rgba(255,255,255,0.6);
+            }
+            .input-group {
+                margin: 20px 0;
+                text-align: left;
+            }
+            .input-group label {
+                display: block;
+                margin-bottom: 8px;
+                color: #00d4ff;
+                font-size: 14px;
+            }
+            .input-group input {
+                width: 100%;
+                padding: 12px;
+                background: rgba(255,255,255,0.1);
+                border: 1px solid rgba(255,255,255,0.2);
+                border-radius: 12px;
+                color: white;
+                font-size: 14px;
+            }
+            .input-group input:focus {
+                outline: none;
+                border-color: #00d4ff;
+            }
+            button {
+                width: 100%;
+                padding: 12px;
+                background: linear-gradient(135deg, #00d4ff, #0099cc);
+                border: none;
+                border-radius: 12px;
+                color: #0f0c29;
+                font-weight: bold;
+                font-size: 16px;
+                cursor: pointer;
+                transition: all 0.3s;
+            }
+            button:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 5px 20px rgba(0,212,255,0.3);
+            }
+            .code-box {
+                background: rgba(0,0,0,0.5);
+                padding: 15px;
+                border-radius: 12px;
+                margin: 15px 0;
+                font-size: 24px;
+                font-weight: bold;
+                letter-spacing: 4px;
+                color: #00ff88;
+                display: none;
             }
             .footer {
                 margin-top: 30px;
@@ -277,6 +256,22 @@ app.get('/', (req, res) => {
                 border-color: rgba(255,255,255,0.1);
                 margin: 20px 0;
             }
+            .message {
+                padding: 10px;
+                border-radius: 8px;
+                margin: 10px 0;
+                display: none;
+            }
+            .message.success {
+                background: rgba(0,255,136,0.2);
+                border: 1px solid #00ff88;
+                color: #00ff88;
+            }
+            .message.error {
+                background: rgba(255,68,68,0.2);
+                border: 1px solid #ff4444;
+                color: #ff4444;
+            }
         </style>
     </head>
     <body>
@@ -286,16 +281,12 @@ app.get('/', (req, res) => {
             
             <div class="stats">
                 <div class="stat">
-                    <div class="stat-value">${totalUsers}</div>
+                    <div class="stat-value" id="totalUsers">0</div>
                     <div class="stat-label">Total Users</div>
                 </div>
                 <div class="stat">
-                    <div class="stat-value">${connected}</div>
+                    <div class="stat-value" id="connected">0</div>
                     <div class="stat-label">Connected</div>
-                </div>
-                <div class="stat">
-                    <div class="stat-value">${total}</div>
-                    <div class="stat-label">Active Sessions</div>
                 </div>
             </div>
             
@@ -309,30 +300,108 @@ app.get('/', (req, res) => {
             
             <hr>
             
-            <p style="font-size: 14px; margin: 15px 0;">
-                🔥 <strong>MAINUL - X DOWNLOADER</strong><br>
-                Download videos from any platform
-            </p>
+            <div class="input-group">
+                <label>👤 User ID</label>
+                <input type="text" id="uid" placeholder="Enter your UID (e.g., mainul)" value="mainul">
+            </div>
+            
+            <div class="input-group">
+                <label>📱 WhatsApp Number</label>
+                <input type="tel" id="number" placeholder="Enter WhatsApp number (e.g., 8801308850528)">
+            </div>
+            
+            <button onclick="pairBot()">🔗 PAIR DEVICE</button>
+            
+            <div id="codeBox" class="code-box"></div>
+            <div id="messageBox" class="message"></div>
+            
+            <hr>
             
             <div class="footer">
                 <p>© 2026 MAINUL - X | All Rights Reserved</p>
-                <p style="font-size: 10px;">📱 Pair via API: POST /pair</p>
+                <p style="font-size: 10px;">📱 Open WhatsApp > Linked Devices > Link with phone number</p>
             </div>
         </div>
+        
+        <script>
+            async function pairBot() {
+                const uid = document.getElementById('uid').value.trim();
+                const number = document.getElementById('number').value.trim();
+                const codeBox = document.getElementById('codeBox');
+                const messageBox = document.getElementById('messageBox');
+                
+                if (!uid || !number) {
+                    showMessage('Please enter both UID and WhatsApp number!', 'error');
+                    return;
+                }
+                
+                codeBox.style.display = 'none';
+                messageBox.style.display = 'none';
+                
+                showMessage('⏳ Requesting pairing code...', 'success');
+                
+                try {
+                    const response = await fetch('/pair', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ uid, number })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        codeBox.innerHTML = '📱 <strong>Pairing Code</strong><br><span style="font-size: 32px;">' + data.code + '</span>';
+                        codeBox.style.display = 'block';
+                        showMessage(data.msg, 'success');
+                    } else {
+                        showMessage(data.msg, 'error');
+                    }
+                } catch (err) {
+                    showMessage('Server error: ' + err.message, 'error');
+                }
+            }
+            
+            function showMessage(msg, type) {
+                const messageBox = document.getElementById('messageBox');
+                messageBox.innerHTML = msg;
+                messageBox.className = 'message ' + type;
+                messageBox.style.display = 'block';
+                
+                setTimeout(() => {
+                    messageBox.style.display = 'none';
+                }, 5000);
+            }
+            
+            async function updateStats() {
+                try {
+                    const response = await fetch('/stats');
+                    const data = await response.json();
+                    document.getElementById('totalUsers').textContent = data.totalUsers || 0;
+                    document.getElementById('connected').textContent = data.connected || 0;
+                } catch (err) {
+                    console.log('Stats update error');
+                }
+            }
+            
+            updateStats();
+            setInterval(updateStats, 5000);
+        </script>
     </body>
     </html>
     `);
 });
 
 // =======================
-// ❤️ HEALTH
+// 🔥 STATS API
 // =======================
-app.get('/health', (req, res) => {
-    res.json({ status: "ok", timestamp: Date.now() });
+app.get('/stats', (req, res) => {
+    const totalUsers = Object.keys(sessions).length;
+    const connected = Object.values(sessions).filter(s => s.user?.id).length;
+    res.json({ totalUsers, connected });
 });
 
 // =======================
-// 🔥 PAIR API (FIXED)
+// 🔥 PAIR API
 // =======================
 app.post('/pair', async (req, res) => {
     try {
@@ -344,27 +413,11 @@ app.post('/pair', async (req, res) => {
 
         const cleanNumber = number.replace(/[^0-9]/g, '');
         
-        // Check if number already exists
-        const sessions = loadSessions();
-        let alreadyConnected = false;
-        let existingUid = null;
+        // Check if session already exists
+        const userAuthDir = path.join(authDir, uid);
+        const hasSession = fs.existsSync(userAuthDir) && fs.readdirSync(userAuthDir).length > 0;
         
-        for (const [key, session] of Object.entries(sessions)) {
-            if (session.number === cleanNumber) {
-                alreadyConnected = true;
-                existingUid = key;
-                break;
-            }
-        }
-        
-        if (alreadyConnected) {
-            return res.json({
-                success: false,
-                msg: `This number is already connected with UID: ${existingUid} ❌`
-            });
-        }
-
-        let sock = activeSessions[uid];
+        let sock = sessions[uid];
         if (!sock) {
             sock = await createBot(uid);
         }
@@ -374,48 +427,22 @@ app.post('/pair', async (req, res) => {
 
         // Request pairing code
         const rawCode = await sock.requestPairingCode(cleanNumber);
-        console.log(chalk.green(`📱 Raw pairing code: ${rawCode}`));
+        console.log(chalk.green(`📱 Pairing code for ${cleanNumber}: ${rawCode}`));
         
-        // 🔥 FIX: Format code to 8 digits
-        let formattedCode = rawCode;
-        
-        // Remove any non-numeric characters
-        formattedCode = formattedCode.replace(/[^0-9]/g, '');
-        
-        // Ensure it's 8 digits (pad with leading zeros if needed)
-        if (formattedCode.length < 8) {
-            formattedCode = formattedCode.padStart(8, '0');
-        }
-        
-        // Format with dash for readability (123-456-789 format)
+        // Format code
+        let formattedCode = rawCode.replace(/[^0-9]/g, '');
         let displayCode = formattedCode;
+        
         if (formattedCode.length === 8) {
             displayCode = `${formattedCode.slice(0, 3)}-${formattedCode.slice(3, 6)}-${formattedCode.slice(6, 8)}`;
         } else if (formattedCode.length === 9) {
             displayCode = `${formattedCode.slice(0, 3)}-${formattedCode.slice(3, 6)}-${formattedCode.slice(6, 9)}`;
         }
 
-        console.log(chalk.green(`📱 Formatted pairing code: ${displayCode}`));
-
-        // Save number to session
-        const allSessions = loadSessions();
-        if (!allSessions[uid]) {
-            allSessions[uid] = {
-                creds: allSessions[uid]?.creds || initAuthCreds(),
-                keys: allSessions[uid]?.keys || {},
-                number: cleanNumber,
-                createdAt: Date.now()
-            };
-        } else {
-            allSessions[uid].number = cleanNumber;
-        }
-        saveSessions(allSessions);
-
         return res.json({
             success: true,
             code: displayCode,
-            rawCode: rawCode,
-            msg: `Pairing code sent to ${cleanNumber}\n\n📱 WhatsApp এ এই কোডটি দিন: ${displayCode}\n\nOpen WhatsApp > Linked Devices > Link with phone number`
+            msg: `✅ Pairing code generated!\n\n📱 Open WhatsApp > Linked Devices > Link with phone number\n🔑 Enter this code: ${displayCode}\n\n⏳ Code expires in 5 minutes`
         });
 
     } catch (err) {
@@ -425,30 +452,21 @@ app.post('/pair', async (req, res) => {
 });
 
 // =======================
-// 🔥 STATUS API
+// 🔥 HEALTH API
 // =======================
-app.post('/status', (req, res) => {
-    const { uid } = req.body;
-    if (!activeSessions[uid]) {
-        return res.json({ connected: false });
-    }
-    return res.json({
-        connected: !!activeSessions[uid].user?.id,
-        uid: uid
-    });
+app.get('/health', (req, res) => {
+    res.json({ status: "ok", timestamp: Date.now() });
 });
 
 // =======================
-// 🔥 LIST ALL SESSIONS
+// 🔥 SESSIONS API
 // =======================
 app.get('/sessions', (req, res) => {
-    const sessions = loadSessions();
     const data = {};
-    for (const [uid, session] of Object.entries(sessions)) {
+    for (const [uid, sock] of Object.entries(sessions)) {
         data[uid] = {
-            number: session.number,
-            connected: !!activeSessions[uid]?.user?.id,
-            createdAt: session.createdAt
+            connected: !!sock.user?.id,
+            userId: sock.user?.id || null
         };
     }
     res.json(data);
@@ -457,23 +475,22 @@ app.get('/sessions', (req, res) => {
 // =======================
 // 🔥 DELETE SESSION
 // =======================
-app.delete('/session/:uid', (req, res) => {
+app.delete('/session/:uid', async (req, res) => {
     const { uid } = req.params;
-    const sessions = loadSessions();
     
     if (sessions[uid]) {
+        try {
+            sessions[uid].end();
+        } catch (e) {}
         delete sessions[uid];
-        saveSessions(sessions);
-        
-        if (activeSessions[uid]) {
-            activeSessions[uid].end();
-            delete activeSessions[uid];
-        }
-        
-        res.json({ success: true, msg: `Session ${uid} deleted` });
-    } else {
-        res.json({ success: false, msg: "Session not found" });
     }
+    
+    const userAuthDir = path.join(authDir, uid);
+    if (fs.existsSync(userAuthDir)) {
+        fs.rmSync(userAuthDir, { recursive: true, force: true });
+    }
+    
+    res.json({ success: true, msg: `Session ${uid} deleted` });
 });
 
 // =======================
@@ -484,16 +501,14 @@ app.listen(PORT, async () => {
 ╔══════════════════════════════════════════════════╗
 ║  🔥 MAINUL-X WHATSAPP BOT 🔥                     ║
 ║  📡 Server: http://localhost:${PORT}               ║
+║  🌐 Web Interface: http://localhost:${PORT}        ║
 ║  📱 Pair API: POST /pair                        ║
 ║  📊 Status: GET /health                         ║
 ║  👤 Sessions: GET /sessions                     ║
-║  ❌ Delete: DELETE /session/:uid                 ║
 ╚══════════════════════════════════════════════════╝
     `));
     
-    console.log(chalk.green(`\n✅ JSON File Storage Ready`));
-    console.log(chalk.yellow(`📁 Sessions saved to: ${STORAGE_FILE}\n`));
-    
+    console.log(chalk.green(`\n✅ Session directory: ${authDir}`));
     await restoreSessions();
-    console.log(chalk.cyan(`\n🤖 Bot is ready!\n`));
+    console.log(chalk.cyan(`\n🤖 Bot is ready! Open http://localhost:${PORT} in browser\n`));
 });
