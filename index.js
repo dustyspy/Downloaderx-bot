@@ -332,7 +332,7 @@ app.get('/health', (req, res) => {
 });
 
 // =======================
-// 🔥 PAIR API
+// 🔥 PAIR API (FIXED)
 // =======================
 app.post('/pair', async (req, res) => {
     try {
@@ -373,8 +373,29 @@ app.post('/pair', async (req, res) => {
         await new Promise(r => setTimeout(r, 2000));
 
         // Request pairing code
-        const code = await sock.requestPairingCode(cleanNumber);
-        console.log(chalk.green(`📱 Pairing code for ${cleanNumber}: ${code}`));
+        const rawCode = await sock.requestPairingCode(cleanNumber);
+        console.log(chalk.green(`📱 Raw pairing code: ${rawCode}`));
+        
+        // 🔥 FIX: Format code to 8 digits
+        let formattedCode = rawCode;
+        
+        // Remove any non-numeric characters
+        formattedCode = formattedCode.replace(/[^0-9]/g, '');
+        
+        // Ensure it's 8 digits (pad with leading zeros if needed)
+        if (formattedCode.length < 8) {
+            formattedCode = formattedCode.padStart(8, '0');
+        }
+        
+        // Format with dash for readability (123-456-789 format)
+        let displayCode = formattedCode;
+        if (formattedCode.length === 8) {
+            displayCode = `${formattedCode.slice(0, 3)}-${formattedCode.slice(3, 6)}-${formattedCode.slice(6, 8)}`;
+        } else if (formattedCode.length === 9) {
+            displayCode = `${formattedCode.slice(0, 3)}-${formattedCode.slice(3, 6)}-${formattedCode.slice(6, 9)}`;
+        }
+
+        console.log(chalk.green(`📱 Formatted pairing code: ${displayCode}`));
 
         // Save number to session
         const allSessions = loadSessions();
@@ -392,8 +413,9 @@ app.post('/pair', async (req, res) => {
 
         return res.json({
             success: true,
-            code: code,
-            msg: `Pairing code sent to ${cleanNumber}`
+            code: displayCode,
+            rawCode: rawCode,
+            msg: `Pairing code sent to ${cleanNumber}\n\n📱 WhatsApp এ এই কোডটি দিন: ${displayCode}\n\nOpen WhatsApp > Linked Devices > Link with phone number`
         });
 
     } catch (err) {
