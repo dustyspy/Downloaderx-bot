@@ -1,495 +1,378 @@
-/**
- * File: src/handler.js
- * MAINUL-X Downloader Bot
- * Author: Md. Mainul Islam (MAINUL-X)
- */
+// src/handler.js
 
-import { userState } from "./userState.js"
-import { handleCommands } from "./commands/commands.js"
+/* 
+===========================================
+BOT NAME : MAINUL - X DOWNLOADER BOT
+AUTHOR  : Md. Mainul Islam
+OWNER   : MAINUL - X
+TELEGRAM: @mdmainulislaminfo
+WHATSAPP: +8801308850528
+GITHUB  : https://github.com/M41NUL
+VERSION : 3.0.0
+===========================================
+*/
 
-import { handleYouTubeDownloader } from "./features/youtube.js"
-import { handleFacebookDownloader } from "./features/facebook.js"
-import { handleInstagramDownloader } from "./features/instagram.js"
-import { handleTikTokDownloader } from "./features/tiktok.js"
+import fs from 'fs';
+import path from 'path';
+import { userState } from './userState.js';
+import { handleYouTubeDownloader } from './features/youtube.js';
+import { handleFacebookDownloader } from './features/facebook.js';
+import { handleInstagramDownloader } from './features/instagram.js';
+import { handleTikTokDownloader } from './features/tiktok.js';
+import { validateUrl } from './utils/validateUrl.js';
 
-import { validateUrl } from "./utils/validateUrl.js"
-import { sendDownloaderMenu } from "./utils/menu.js"
+const menuImagePath = path.join(process.cwd(), 'src/assets/menu.jpg');
 
-/* =========================
-WELCOME TRACKER
-========================= */
-
-const welcomeTracker = new Map()
-
-function shouldSendWelcome(user){
-
-const today = new Date().toDateString()
-const last = welcomeTracker.get(user)
-
-if(last !== today){
-welcomeTracker.set(user,today)
-return true
-}
-
-return false
-}
-
-/* =========================
-DOWNLOAD QUEUE
-========================= */
-
-let queue = []
-let processing = false
-
-async function runQueue(){
-
-if(processing) return
-if(queue.length === 0) return
-
-processing = true
-
-const job = queue.shift()
-
-try{
-await job()
-}catch(err){
-console.log("Queue error:",err)
-}
-
-processing = false
-runQueue()
-
-}
-
-/* =========================
-TYPING EFFECT
-========================= */
-
-async function typing(sock,jid){
-
-try{
-
-await sock.sendPresenceUpdate("composing",jid)
-
-await new Promise(r=>setTimeout(r,700))
-
-await sock.sendPresenceUpdate("paused",jid)
-
-}catch{}
-
-}
-
-/* =========================
-MAIN HANDLER
-========================= */
-
-export async function handler(sock,msg){
-
-if(!msg?.message) return
-
-const from = msg.key.remoteJid
-
-/* AUTO READ */
-
-try{
-await sock.readMessages([msg.key])
-}catch{}
-
-const state = userState.get(from) || {step:"start"}
-
-const text =
-msg.message?.conversation ||
-msg.message?.extendedTextMessage?.text ||
-msg.message?.imageMessage?.caption ||
-msg.message?.videoMessage?.caption ||
-""
-
-const lower = text.toLowerCase().trim()
-
-/* =========================
-STEP TIMEOUT
-========================= */
-
-if(state.step && state.time){
-
-const diff = Date.now() - state.time
-
-if(diff > 60000){
-
-userState.set(from,{step:"menuMain"})
-
-await sock.sendMessage(from,{
-text:"⌛ Request expired. Please send command again."
-})
-
-return
-
-}
-
-}
-
-/* =========================
-WELCOME MESSAGE
-========================= */
-
-if(shouldSendWelcome(from)){
-
-await typing(sock,from)
-
-await sock.sendMessage(from,{
-text:`👋 Welcome to *MAINUL - X DOWNLOADER BOT*
+// ========== MESSAGES ==========
+const WELCOME_MSG = `👋 Welcome to *MAINUL - X DOWNLOADER BOT*
 
 Send a video link directly or press Start.
 
-📥 Supported Platforms
+📥 *Supported Platforms*
 • YouTube
 • Facebook
 • Instagram
-• TikTok`,
-buttons:[
-{
-buttonId:"start_menu",
-buttonText:{displayText:"🚀 Start"},
-type:1
-}
-],
-headerType:1
-})
+• TikTok
 
-return
+⚡ *Commands*
+/dev - Developer info
+/admin - Admin panel access
+/menu - Show menu
+/help - Help & commands
 
-}
+💎 *Powered by MAINUL - X TEAM*`;
 
-/* =========================
-START BUTTON
-========================= */
+const HELP_MSG = `📖 *HELP & COMMANDS*
 
-if(msg.message?.buttonsResponseMessage){
+┌─────────────────────────────────┐
+│  🤖 *MAINUL - X DOWNLOADER BOT* │
+└─────────────────────────────────┘
 
-const id = msg.message.buttonsResponseMessage.selectedButtonId
+📌 *How to use:*
+1️⃣ Send a video link (YouTube, Facebook, Instagram, TikTok)
+2️⃣ Bot will auto-detect the platform
+3️⃣ Select quality and download
 
-if(id === "start_menu"){
+📋 *Commands*
+├─ /start - Start the bot
+├─ /menu - Show main menu
+├─ /dev - Developer info
+├─ /admin - Admin panel
+└─ /help - This help message
 
-await typing(sock,from)
-await sendDownloaderMenu(sock,from)
+💡 *Tips*
+• Send any supported link directly
+• Bot auto-detects platform
+• No need to type platform name
 
-return
+© 2026 MAINUL - X | All Rights Reserved`;
 
-}
+const DEV_INFO = `👨‍💻 *DEVELOPER INFO*
 
-if(id === "cancel_download"){
+┌─────────────────────────────────┐
+│  ✨ *MAINUL - X*                │
+│  💻 Full Stack Developer        │
+│  🤖 WhatsApp Bot Creator        │
+└─────────────────────────────────┘
 
-userState.set(from,{step:"menuMain"})
+📱 *Contact*
+├─ 📧 Email: githubmainul@gmail.com
+├─ 📱 WhatsApp: +8801308850528
+├─ 💬 Telegram: @mdmainulislaminfo
+└─ 🐙 GitHub: https://github.com/M41NUL
 
-await sock.sendMessage(from,{
-text:"❌ Download cancelled."
-})
+⚡ *Skills*
+├─ JavaScript/Node.js
+├─ Python/Flask
+├─ React/Vue.js
+└─ Bot Development
 
-return
+💎 *Support*
+Buy me a coffee? Support my work!
 
-}
+© 2026 MAINUL - X | All Rights Reserved`;
 
-}
+const ADMIN_INFO = `👑 *ADMIN PANEL*
 
-/* =========================
-START / MENU TEXT
-========================= */
+┌─────────────────────────────────┐
+│  🔐 Admin Access Required       │
+└─────────────────────────────────┘
 
-if(lower === "start" || lower === "menu"){
+📊 *System Stats*
+├─ 🤖 Bot Status: ONLINE
+├─ 👥 Total Users: --
+├─ 📥 Total Downloads: --
+└─ ⏱ Uptime: --
 
-await typing(sock,from)
-await sendDownloaderMenu(sock,from)
+💡 *Admin Commands*
+├─ /users - List all users
+├─ /stats - System statistics
+├─ /broadcast - Send message to all
+└─ /restart - Restart bot
 
-return
+⚠️ *Note*
+This panel is for authorized admins only.
+Contact @mdmainulislaminfo for access.
 
-}
+© 2026 MAINUL - X TEAM`;
 
-/* =========================
-COMMAND SYSTEM
-========================= */
-
-try{
-if(await handleCommands(sock,from,lower)) return
-}catch(err){
-console.log("Command error:",err)
-}
-
-/* =========================
-SMART PLATFORM DETECT
-========================= */
-
-if(validateUrl(text,"youtube")){
-
-queue.push(async()=>{
-
-await typing(sock,from)
-
-await sock.sendMessage(from,{
-text:"🎬 Detected: YouTube Video\n⬇ Starting download..."
-})
-
-await handleYouTubeDownloader(sock,from,text)
-
-})
-
-runQueue()
-return
-
-}
-
-if(validateUrl(text,"facebook")){
-
-queue.push(async()=>{
-
-await typing(sock,from)
-
-await sock.sendMessage(from,{
-text:"📘 Detected: Facebook Video\n⬇ Starting download..."
-})
-
-await handleFacebookDownloader(sock,from,text)
-
-})
-
-runQueue()
-return
-
+// ========== AUTO DETECT PLATFORM FUNCTION ==========
+function detectPlatform(url) {
+    const urlLower = url.toLowerCase();
+    
+    if (urlLower.includes('youtube.com') || urlLower.includes('youtu.be')) {
+        return 'youtube';
+    }
+    if (urlLower.includes('facebook.com') || urlLower.includes('fb.com') || urlLower.includes('fb.watch')) {
+        return 'facebook';
+    }
+    if (urlLower.includes('instagram.com') || urlLower.includes('instagr.am')) {
+        return 'instagram';
+    }
+    if (urlLower.includes('tiktok.com') || urlLower.includes('vt.tiktok.com')) {
+        return 'tiktok';
+    }
+    return null;
 }
 
-if(validateUrl(text,"instagram")){
+// ========== MAIN HANDLER ==========
+export async function handler(sock, msg) {
+    if (!msg?.message) return;
 
-queue.push(async()=>{
+    const from = msg.key.remoteJid;
+    const state = userState.get(from) || { step: 'start' };
 
-await typing(sock,from)
+    const text =
+        msg.message?.conversation ||
+        msg.message?.extendedTextMessage?.text ||
+        msg.message?.imageMessage?.caption ||
+        msg.message?.videoMessage?.caption;
 
-await sock.sendMessage(from,{
-text:"📸 Detected: Instagram Video\n⬇ Starting download..."
-})
+    // ========== COMMAND HANDLER ==========
+    if (text) {
+        const lowerText = text.toLowerCase().trim();
+        
+        // /start command
+        if (lowerText === '/start' || lowerText === 'start') {
+            await sock.sendMessage(from, { text: WELCOME_MSG });
+            await sendDownloaderMenu(sock, from);
+            userState.set(from, { step: 'menuMain' });
+            return;
+        }
+        
+        // /menu command
+        if (lowerText === '/menu' || lowerText === 'menu') {
+            await sendDownloaderMenu(sock, from);
+            userState.set(from, { step: 'menuMain' });
+            return;
+        }
+        
+        // /help command
+        if (lowerText === '/help' || lowerText === 'help') {
+            await sock.sendMessage(from, { text: HELP_MSG });
+            return;
+        }
+        
+        // /dev command
+        if (lowerText === '/dev' || lowerText === 'dev' || lowerText === '!dev') {
+            await sock.sendMessage(from, { text: DEV_INFO });
+            return;
+        }
+        
+        // /admin command
+        if (lowerText === '/admin' || lowerText === 'admin' || lowerText === '!admin') {
+            await sock.sendMessage(from, { text: ADMIN_INFO });
+            return;
+        }
+        
+        // ========== AUTO DETECT URL ==========
+        const platform = detectPlatform(text);
+        
+        if (platform) {
+            await sock.sendPresenceUpdate('composing', from);
+            
+            switch (platform) {
+                case 'youtube':
+                    if (validateUrl(text, 'youtube')) {
+                        await handleYouTubeDownloader(sock, from, text);
+                    } else {
+                        await sock.sendMessage(from, { 
+                            text: '❌ Invalid YouTube URL. Please send a valid YouTube link.'
+                        });
+                    }
+                    break;
+                    
+                case 'facebook':
+                    if (validateUrl(text, 'facebook')) {
+                        await handleFacebookDownloader(sock, from, text);
+                    } else {
+                        await sock.sendMessage(from, { 
+                            text: '❌ Invalid Facebook URL. Please send a valid Facebook video link.'
+                        });
+                    }
+                    break;
+                    
+                case 'instagram':
+                    if (validateUrl(text, 'instagram')) {
+                        await handleInstagramDownloader(sock, from, text);
+                    } else {
+                        await sock.sendMessage(from, { 
+                            text: '❌ Invalid Instagram URL. Please send a valid Instagram video link.'
+                        });
+                    }
+                    break;
+                    
+                case 'tiktok':
+                    if (validateUrl(text, 'tiktok')) {
+                        await handleTikTokDownloader(sock, from, text);
+                    } else {
+                        await sock.sendMessage(from, { 
+                            text: '❌ Invalid TikTok URL. Please send a valid TikTok video link.'
+                        });
+                    }
+                    break;
+            }
+            
+            await sock.sendPresenceUpdate('paused', from);
+            return;
+        }
+    }
 
-await handleInstagramDownloader(sock,from,text)
+    // ========== INTERACTIVE BUTTON HANDLER ==========
+    let rowId;
+    try {
+        if (msg.message?.interactiveResponseMessage?.nativeFlowResponseMessage) {
+            rowId = JSON.parse(msg.message.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson).id;
+        } else if (msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId) {
+            rowId = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
+        }
+    } catch (err) {
+        console.error('[DEBUG] Failed to parse rowId:', err);
+    }
 
-})
+    const btnId = msg.message?.buttonsResponseMessage?.selectedButtonId;
+    
+    if (btnId === 'back_to_menu') {
+        await sock.sendPresenceUpdate('composing', from);
+        await new Promise(r => setTimeout(r, 800));
+        await sendDownloaderMenu(sock, from);
+        await sock.sendPresenceUpdate('paused', from);
+        userState.set(from, { step: 'menuMain' });
+        return;
+    }
 
-runQueue()
-return
+    if (rowId) {
+        switch (rowId) {
+            case 'yt_downloader':
+                userState.set(from, { step: 'yt_wait_url' });
+                await sock.sendMessage(from, { text: '📌 Send the *YouTube* link you want to download:' });
+                break;
+            case 'fb_downloader':
+                userState.set(from, { step: 'fb_wait_url' });
+                await sock.sendMessage(from, { text: '📌 Send the *Facebook* video link:' });
+                break;
+            case 'ig_downloader':
+                userState.set(from, { step: 'ig_wait_url' });
+                await sock.sendMessage(from, { text: '📌 Send the *Instagram* video link:' });
+                break;
+            case 'tt_downloader':
+                userState.set(from, { step: 'tt_wait_url' });
+                await sock.sendMessage(from, { text: '📌 Send the *TikTok* video link:' });
+                break;
+            default:
+                break;
+        }
+        return;
+    }
 
+    // ========== STEP BASED URL HANDLER ==========
+    if (text) {
+        switch (state.step) {
+            case 'yt_wait_url':
+                if (!validateUrl(text, 'youtube')) {
+                    await sock.sendMessage(from, { 
+                        text: '❌ Invalid URL. Please send a valid YouTube link.',
+                        buttons: [{ buttonId: 'back_to_menu', buttonText: { displayText: 'Back to Menu' }, type: 1 }]
+                    });
+                    return;
+                }
+                await handleYouTubeDownloader(sock, from, text);
+                break;
+
+            case 'fb_wait_url':
+                if (!validateUrl(text, 'facebook')) {
+                    await sock.sendMessage(from, { 
+                        text: '❌ Invalid URL. Please send a valid Facebook link.',
+                        buttons: [{ buttonId: 'back_to_menu', buttonText: { displayText: 'Back to Menu' }, type: 1 }]
+                    });
+                    return;
+                }
+                await handleFacebookDownloader(sock, from, text);
+                break;
+
+            case 'ig_wait_url':
+                if (!validateUrl(text, 'instagram')) {
+                    await sock.sendMessage(from, { 
+                        text: '❌ Invalid URL. Please send a valid Instagram link.',
+                        buttons: [{ buttonId: 'back_to_menu', buttonText: { displayText: 'Back to Menu' }, type: 1 }]
+                    });
+                    return;
+                }
+                await handleInstagramDownloader(sock, from, text);
+                break;
+
+            case 'tt_wait_url':
+                if (!validateUrl(text, 'tiktok')) {
+                    await sock.sendMessage(from, { 
+                        text: '❌ Invalid URL. Please send a valid TikTok link.',
+                        buttons: [{ buttonId: 'back_to_menu', buttonText: { displayText: 'Back to Menu' }, type: 1 }]
+                    });
+                    return;
+                }
+                await handleTikTokDownloader(sock, from, text);
+                break;
+
+            default:
+                await sendDownloaderMenu(sock, from);
+                break;
+        }
+
+        userState.set(from, { step: 'menuMain' });
+        return;
+    }
+
+    if (state.step === 'start' || state.step === 'menuMain') {
+        await sendDownloaderMenu(sock, from);
+        userState.set(from, { step: 'menuMain' });
+    }
 }
 
-if(validateUrl(text,"tiktok")){
-
-queue.push(async()=>{
-
-await typing(sock,from)
-
-await sock.sendMessage(from,{
-text:"🎵 Detected: TikTok Video\n⬇ Starting download..."
-})
-
-await handleTikTokDownloader(sock,from,text)
-
-})
-
-runQueue()
-return
-
-}
-
-/* =========================
-INTERACTIVE MENU RESPONSE
-========================= */
-
-let rowId
-
-try{
-
-if(msg.message?.interactiveResponseMessage?.nativeFlowResponseMessage){
-
-rowId = JSON.parse(
-msg.message.interactiveResponseMessage
-.nativeFlowResponseMessage.paramsJson
-).id
-
-}
-
-}catch{}
-
-/* =========================
-MENU BUTTONS
-========================= */
-
-if(rowId){
-
-switch(rowId){
-
-case "yt_downloader":
-
-userState.set(from,{
-step:"yt_wait_url",
-time:Date.now()
-})
-
-await sock.sendMessage(from,{
-text:"📺 Send YouTube video link\n\n⏳ Time limit: 60 seconds",
-buttons:[
-{
-buttonId:"cancel_download",
-buttonText:{displayText:"❌ Cancel"},
-type:1
-}
-],
-headerType:1
-})
-
-return
-
-case "fb_downloader":
-
-userState.set(from,{
-step:"fb_wait_url",
-time:Date.now()
-})
-
-await sock.sendMessage(from,{
-text:"📘 Send Facebook video link\n\n⏳ Time limit: 60 seconds",
-buttons:[
-{
-buttonId:"cancel_download",
-buttonText:{displayText:"❌ Cancel"},
-type:1
-}
-],
-headerType:1
-})
-
-return
-
-case "ig_downloader":
-
-userState.set(from,{
-step:"ig_wait_url",
-time:Date.now()
-})
-
-await sock.sendMessage(from,{
-text:"📸 Send Instagram video link\n\n⏳ Time limit: 60 seconds",
-buttons:[
-{
-buttonId:"cancel_download",
-buttonText:{displayText:"❌ Cancel"},
-type:1
-}
-],
-headerType:1
-})
-
-return
-
-case "tt_downloader":
-
-userState.set(from,{
-step:"tt_wait_url",
-time:Date.now()
-})
-
-await sock.sendMessage(from,{
-text:"🎵 Send TikTok video link\n\n⏳ Time limit: 60 seconds",
-buttons:[
-{
-buttonId:"cancel_download",
-buttonText:{displayText:"❌ Cancel"},
-type:1
-}
-],
-headerType:1
-})
-
-return
-
-}
-
-}
-
-/* =========================
-STEP HANDLER
-========================= */
-
-switch(state.step){
-
-case "yt_wait_url":
-
-if(!validateUrl(text,"youtube")){
-await sock.sendMessage(from,{text:"❌ Invalid YouTube link"})
-return
-}
-
-queue.push(async()=>{
-
-await handleYouTubeDownloader(sock,from,text)
-
-})
-
-runQueue()
-
-userState.set(from,{step:"menuMain"})
-return
-
-
-case "fb_wait_url":
-
-if(!validateUrl(text,"facebook")){
-await sock.sendMessage(from,{text:"❌ Invalid Facebook link"})
-return
-}
-
-queue.push(async()=>{
-
-await handleFacebookDownloader(sock,from,text)
-
-})
-
-runQueue()
-
-userState.set(from,{step:"menuMain"})
-return
-
-
-case "ig_wait_url":
-
-if(!validateUrl(text,"instagram")){
-await sock.sendMessage(from,{text:"❌ Invalid Instagram link"})
-return
-}
-
-queue.push(async()=>{
-
-await handleInstagramDownloader(sock,from,text)
-
-})
-
-runQueue()
-
-userState.set(from,{step:"menuMain"})
-return
-
-
-case "tt_wait_url":
-
-if(!validateUrl(text,"tiktok")){
-await sock.sendMessage(from,{text:"❌ Invalid TikTok link"})
-return
-}
-
-queue.push(async()=>{
-
-await handleTikTokDownloader(sock,from,text)
-
-})
-
-runQueue()
-
-userState.set(from,{step:"menuMain"})
-return
-
-}
-
+// ========== SEND MENU FUNCTION ==========
+export async function sendDownloaderMenu(sock, from) {
+    await sock.sendMessage(from, { text: WELCOME_MSG });
+    
+    await sock.sendMessage(from, {
+        image: fs.readFileSync(menuImagePath),
+        caption: '📱 *MAINUL - X DOWNLOADER BOT*\n\nChoose a platform to download videos:',
+        footer: '© 2026 MAINUL - X | All Rights Reserved',
+        interactiveButtons: [
+            {
+                name: 'single_select',
+                buttonParamsJson: JSON.stringify({
+                    title: '🎬 Video Downloader',
+                    sections: [
+                        {
+                            title: '📺 Select Platform',
+                            rows: [
+                                { title: '▶️ YouTube Downloader', description: 'Download videos from YouTube', id: 'yt_downloader' },
+                                { title: '📘 Facebook Downloader', description: 'Download videos from Facebook', id: 'fb_downloader' },
+                                { title: '📸 Instagram Downloader', description: 'Download videos from Instagram', id: 'ig_downloader' },
+                                { title: '🎵 TikTok Downloader', description: 'Download videos from TikTok', id: 'tt_downloader' },
+                            ],
+                        },
+                    ],
+                }),
+            },
+        ],
+    });
 }
