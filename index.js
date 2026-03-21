@@ -112,7 +112,103 @@ async function createBot(uid) {
 // 🔥 ROOT (CHECK SERVER)
 // =======================
 app.get('/', (req, res) => {
-    res.send('🤖 MAINUL-X MULTI BOT SERVER RUNNING ✅');
+    res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>MAINUL-X BOT</title>
+
+        <style>
+            body {
+                margin: 0;
+                font-family: 'Segoe UI', sans-serif;
+                background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+                color: white;
+                text-align: center;
+                padding: 40px;
+            }
+
+            .card {
+                background: rgba(255,255,255,0.05);
+                backdrop-filter: blur(10px);
+                padding: 30px;
+                border-radius: 20px;
+                box-shadow: 0 0 30px rgba(0, 212, 255, 0.2);
+                display: inline-block;
+                max-width: 400px;
+            }
+
+            h1 {
+                color: #00d4ff;
+                margin-bottom: 10px;
+            }
+
+            .status {
+                color: #00ff88;
+                font-weight: bold;
+                margin: 10px 0;
+            }
+
+            .info {
+                margin-top: 20px;
+                font-size: 14px;
+                color: #ccc;
+            }
+
+            .btn {
+                display: inline-block;
+                margin-top: 20px;
+                padding: 10px 20px;
+                border-radius: 10px;
+                background: #00d4ff;
+                color: black;
+                text-decoration: none;
+                font-weight: bold;
+                transition: 0.3s;
+            }
+
+            .btn:hover {
+                background: #00aacc;
+            }
+
+            footer {
+                margin-top: 30px;
+                font-size: 12px;
+                color: #aaa;
+            }
+        </style>
+    </head>
+    <body>
+
+        <div class="card">
+            <h1>🤖 MAINUL - X BOT</h1>
+
+            <p class="status">● SERVER RUNNING</p>
+
+            <hr>
+
+            <p>🚀 Multi User WhatsApp Bot System</p>
+            <p>⚡ Powered by Node.js & Baileys</p>
+
+            <div class="info">
+                <p>👨‍💻 Developer: Md. Mainul Islam</p>
+                <p>📱 WhatsApp: +8801308850528</p>
+                <p>💬 Telegram: @mdmainulislaminfo</p>
+                <p>🐙 GitHub: github.com/M41NUL</p>
+            </div>
+
+            <a href="/health" class="btn">Check API Status</a>
+
+            <footer>
+                © 2026 MAINUL - X | All Rights Reserved
+            </footer>
+        </div>
+
+    </body>
+    </html>
+    `);
 });
 
 // =======================
@@ -129,8 +225,6 @@ app.post('/pair', async (req, res) => {
     try {
         const { uid, number } = req.body;
 
-        console.log("PAIR REQUEST:", uid, number);
-
         if (!uid || !number) {
             return res.json({ success: false, msg: "Missing uid/number" });
         }
@@ -141,7 +235,6 @@ app.post('/pair', async (req, res) => {
             sock = await createBot(uid);
         }
 
-        // already connected check
         if (sock.user) {
             return res.json({
                 success: false,
@@ -149,9 +242,10 @@ app.post('/pair', async (req, res) => {
             });
         }
 
-        const code = await sock.requestPairingCode(number);
+        // 🔥 FIX HERE
+        await waitForConnection(sock);
 
-        console.log("PAIR CODE:", code);
+        const code = await sock.requestPairingCode(number);
 
         return res.json({
             success: true,
@@ -160,28 +254,12 @@ app.post('/pair', async (req, res) => {
 
     } catch (err) {
         console.log("PAIR ERROR:", err);
+
         return res.json({
             success: false,
             msg: err.message
         });
     }
-});
-
-// =======================
-// 🔥 STATUS API
-// =======================
-app.post('/status', (req, res) => {
-    const { uid } = req.body;
-
-    if (!sessions[uid]) {
-        return res.json({ connected: false });
-    }
-
-    const sock = sessions[uid];
-
-    return res.json({
-        connected: !!sock.user
-    });
 });
 
 // =======================
