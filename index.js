@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import express from 'express';
-import { makeWASocket, DisconnectReason } from 'atexovi-baileys';
+import { makeWASocket, DisconnectReason, initAuthCreds } from 'atexovi-baileys';
 import pino from 'pino';
 import chalk from 'chalk';
 import dotenv from 'dotenv';
@@ -78,7 +78,11 @@ async function useFirebaseAuthState(uid) {
     const ref = db.ref(`sessions/${uid}`);
 
     let credsSnap = await ref.child('creds').get();
-    let creds = credsSnap.val() || {};
+    let creds = credsSnap.val();
+
+    if (!creds) {
+        creds = initAuthCreds(); // 🔥 FIX
+    }
 
     return {
         state: {
@@ -91,7 +95,6 @@ async function useFirebaseAuthState(uid) {
                         let snap = await ref.child(`keys/${type}-${id}`).get();
                         let value = snap.val();
 
-                        // 🔥 Buffer FIX
                         if (value && type === 'app-state-sync-key') {
                             value = Buffer.from(value, 'base64');
                         }
@@ -108,7 +111,6 @@ async function useFirebaseAuthState(uid) {
 
                             let value = data[type][id];
 
-                            // 🔥 Buffer → base64
                             if (value instanceof Buffer) {
                                 value = value.toString('base64');
                             }
@@ -124,12 +126,11 @@ async function useFirebaseAuthState(uid) {
             }
         },
 
-        saveCreds: async () => {
-            await ref.child('creds').set(creds);
+        saveCreds: async (newCreds) => {
+            await ref.child('creds').set(newCreds);
         }
     };
 }
-
 // =======================
 // 🔥 CREATE BOT
 // =======================
