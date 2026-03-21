@@ -6,12 +6,11 @@ import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
 import chalk from 'chalk';
-import process from 'process';
 import dotenv from 'dotenv';
 import { handler } from './src/handler.js';
 import { wrapSendMessageGlobally } from './src/utils/typing.js';
 
-dotenv.config({ debug: false });
+dotenv.config();
 
 // =======================
 // 🔥 EXPRESS SERVER
@@ -27,7 +26,7 @@ const PORT = process.env.PORT || 3000;
 const sessions = {};
 
 // =======================
-// 🔥 LOG FILTER SYSTEM (KEEPED)
+// 🔥 LOG FILTER
 // =======================
 const originalError = console.error;
 const originalLog = console.log;
@@ -49,11 +48,14 @@ console.log = function(...args) {
 };
 
 // =======================
-// 🔥 CREATE BOT PER USER
+// 🔥 CREATE BOT (PER USER)
 // =======================
 async function createBot(uid) {
 
-    const authDir = path.join(process.cwd(), 'session', uid);
+    if (sessions[uid]) return sessions[uid]; // prevent duplicate
+
+    const authDir = path.join(process.cwd(), 'sessions', uid);
+
     if (!fs.existsSync(authDir)) {
         fs.mkdirSync(authDir, { recursive: true });
     }
@@ -81,9 +83,10 @@ async function createBot(uid) {
 
             if (reason !== DisconnectReason.loggedOut) {
                 console.log(chalk.yellow(`🔁 Reconnecting ${uid}...`));
+                delete sessions[uid]; // important
                 createBot(uid);
             } else {
-                console.log(chalk.red(`❌ ${uid} session expired`));
+                console.log(chalk.red(`❌ ${uid} logged out`));
                 delete sessions[uid];
             }
         }
@@ -106,11 +109,27 @@ async function createBot(uid) {
 }
 
 // =======================
-// 🔥 PAIR API (MAIN)
+// 🔥 ROOT (CHECK SERVER)
+// =======================
+app.get('/', (req, res) => {
+    res.send('🤖 MAINUL-X MULTI BOT SERVER RUNNING ✅');
+});
+
+// =======================
+// ❤️ HEALTH
+// =======================
+app.get('/health', (req, res) => {
+    res.json({ status: "ok" });
+});
+
+// =======================
+// 🔥 PAIR API
 // =======================
 app.post('/pair', async (req, res) => {
     try {
         const { uid, number } = req.body;
+
+        console.log("PAIR REQUEST:", uid, number);
 
         if (!uid || !number) {
             return res.json({ success: false, msg: "Missing uid/number" });
@@ -122,7 +141,17 @@ app.post('/pair', async (req, res) => {
             sock = await createBot(uid);
         }
 
+        // already connected check
+        if (sock.user) {
+            return res.json({
+                success: false,
+                msg: "Bot already connected"
+            });
+        }
+
         const code = await sock.requestPairingCode(number);
+
+        console.log("PAIR CODE:", code);
 
         return res.json({
             success: true,
@@ -131,20 +160,33 @@ app.post('/pair', async (req, res) => {
 
     } catch (err) {
         console.log("PAIR ERROR:", err);
-        return res.json({ success: false });
+        return res.json({
+            success: false,
+            msg: err.message
+        });
     }
 });
 
 // =======================
-// ❤️ HEALTH CHECK
+// 🔥 STATUS API
 // =======================
-app.get('/health', (req, res) => {
-    res.json({ status: "ok" });
+app.post('/status', (req, res) => {
+    const { uid } = req.body;
+
+    if (!sessions[uid]) {
+        return res.json({ connected: false });
+    }
+
+    const sock = sessions[uid];
+
+    return res.json({
+        connected: !!sock.user
+    });
 });
 
 // =======================
 // 🚀 START SERVER
 // =======================
 app.listen(PORT, () => {
-    console.log(chalk.cyan(`🚀 Bot Server Running on ${PORT}`));
+    console.log(chalk.cyan(`🚀 MAINUL-X BOT SERVER RUNNING ON PORT ${PORT}`));
 });
