@@ -191,9 +191,11 @@ app.get('/', (req, res) => {
 });
 
 // =======================
-// 🔥 PAIR API
+// 🔥 PAIR API (OPTIMIZED)
 // =======================
 app.post('/pair', async (req, res) => {
+    let isResponded = false; // ডাবল রেসপন্স ঠেকানোর জন্য
+
     try {
         let { uid, number } = req.body;
 
@@ -204,49 +206,56 @@ app.post('/pair', async (req, res) => {
         const cleanNumber = number.replace(/[^0-9]/g, '');
         const sessionId = `${uid}_${cleanNumber}`;
 
-        let sock = sessions[sessionId];
+        console.log(`📱 [${sessionId}] Starting pairing process...`);
 
-        if (!sock) {
-            sock = await createBot(sessionId);
+        // সেশন থাকলে সেটা ডিলিট করে ফ্রেশ সকেট তৈরি করা ভালো পেয়ারিং কোড এর সময়
+        if (sessions[sessionId]) {
+            delete sessions[sessionId];
         }
 
-        if (sock.user?.id) {
-            return res.json({ success: false, msg: "Already connected" });
-        }
+        let sock = await createBot(sessionId);
 
-        console.log(`📱 Requesting pairing for: ${cleanNumber}`);
-
-        // 🔥 FIX: সকেট রেডি হওয়ার জন্য স্মার্ট ওয়েট লুপ
+        // ১. সকেট প্রপারলি ইনিশিয়ালাইজ হওয়ার জন্য অপেক্ষা
         let waitCount = 0;
-        while (!sock.requestPairingCode && waitCount < 10) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
+        while (!sock.requestPairingCode && waitCount < 15) {
+            await new Promise(r => setTimeout(r, 1000));
             waitCount++;
         }
 
         if (!sock.requestPairingCode) {
-            return res.json({ success: false, msg: "Failed to initialize socket." });
+            return res.json({ success: false, msg: "Socket initialization timeout." });
         }
 
-        // একটু পজ দেওয়া সেফটির জন্য
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        const code = await sock.requestPairingCode(cleanNumber);
+        // ২. একটু সময় দেওয়া যাতে নেটওয়ার্ক স্ট্যাবল হয়
+        await new Promise(r => setTimeout(r, 3000));
 
-        await db.ref(`sessions/${sessionId}/number`).set(cleanNumber);
+        // ৩. পেয়ারিং কোড রিকোয়েস্ট (Try-Catch এর ভেতরে)
+        try {
+            const code = await sock.requestPairingCode(cleanNumber);
+            console.log(`✅ [${sessionId}] Code Generated: ${code}`);
 
-        return res.json({
-            success: true,
-            code
-        });
+            await db.ref(`sessions/${sessionId}/number`).set(cleanNumber);
+
+            if (!isResponded) {
+                isResponded = true;
+                return res.json({ success: true, code });
+            }
+        } catch (pairErr) {
+            console.log(`❌ [${sessionId}] Pairing Error:`, pairErr.message);
+            if (!isResponded) {
+                isResponded = true;
+                return res.json({ success: false, msg: "WhatsApp rejected request. Try again after 1 minute." });
+            }
+        }
 
     } catch (err) {
-        console.log("🔥 PAIR ERROR:", err.message);
-        return res.json({
-            success: false,
-            msg: err.message
-        });
+        console.log("🔥 GLOBAL PAIR ERROR:", err.message);
+        if (!isResponded) {
+            return res.json({ success: false, msg: "Server internal error." });
+        }
     }
 });
+
 
 // =======================
 // 🔥 REMOVE
