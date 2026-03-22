@@ -28,9 +28,10 @@ const rawPrivateKey = `-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEF
 const serviceAccount = {
   type: "service_account",
   project_id: "downloaderx-wa-code",
-  private_key: privateKey,
+  private_key: rawPrivateKey, // ✅ এখানে rawPrivateKey হবে
   client_email: "firebase-adminsdk-fbsvc@downloaderx-wa-code.iam.gserviceaccount.com"
 };
+
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
