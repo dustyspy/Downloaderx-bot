@@ -1,5 +1,11 @@
 #!/usr/bin/env node
+process.on('uncaughtException', (err) => {
+    console.log('💥 UNCAUGHT ERROR:', err);
+});
 
+process.on('unhandledRejection', (err) => {
+    console.log('💥 PROMISE ERROR:', err);
+});
 import express from 'express';
 import { makeWASocket, DisconnectReason, initAuthCreds } from 'atexovi-baileys';
 import pino from 'pino';
@@ -194,17 +200,6 @@ app.post('/pair', async (req, res) => {
         }
 
         const cleanNumber = number.replace(/[^0-9]/g, '');
-
-        // ❌ Duplicate check (GLOBAL)
-        const exists = await db.ref(`numbers/${cleanNumber}`).get();
-
-        if (exists.exists()) {
-            return res.json({
-                success: false,
-                msg: "❌ Number already connected"
-            });
-        }
-
         const sessionId = `${uid}_${cleanNumber}`;
 
         let sock = sessions[sessionId];
@@ -214,23 +209,30 @@ app.post('/pair', async (req, res) => {
         }
 
         if (sock.user) {
+            return res.json({ success: false, msg: "Already connected" });
+        }
+
+        console.log("📱 Waiting socket ready...");
+
+        // 🔥 IMPORTANT WAIT
+        await new Promise(r => setTimeout(r, 4000));
+
+        console.log("📱 Requesting pairing...");
+
+        let code;
+
+        try {
+            code = await sock.requestPairingCode(cleanNumber);
+        } catch (err) {
+            console.log("❌ Pairing error:", err);
+
             return res.json({
                 success: false,
-                msg: "Already connected"
+                msg: "Pairing failed (socket not ready)"
             });
         }
 
-        await new Promise(r => setTimeout(r, 1500));
-
-        const code = await sock.requestPairingCode(cleanNumber);
-
-        // ✅ Save mapping
-        await db.ref(`numbers/${cleanNumber}`).set(uid);
-
-        await db.ref(`sessions/${sessionId}/meta`).set({
-            uid,
-            number: cleanNumber
-        });
+        console.log("✅ CODE:", code);
 
         return res.json({
             success: true,
@@ -239,7 +241,7 @@ app.post('/pair', async (req, res) => {
 
     } catch (err) {
 
-        console.log("PAIR ERROR:", err);
+        console.log("🔥 FATAL ERROR:", err);
 
         return res.json({
             success: false,
