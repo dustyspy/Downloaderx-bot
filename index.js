@@ -22,7 +22,6 @@ import admin from 'firebase-admin';
 // =======================
 // 🔥 FIREBASE CONFIG
 // =======================
-// Fixed the invalid \M escape sequence and safely formatted the key
 const rawPrivateKey = `-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDXiCy7lWmMpFEo\nROWrFHQhBthAR2u6uDjJUK4rys8yvHsLK4tsbDIo0Xl0qKEkmRe7jXJ+mcuQ6Y5b\nJ+b5v8lJKah6ZGuwevw55jMyeWwvgUslUQOcNto/VGKlZYbLbtMiiu7DpZmL7Hs3\n+PExUuTIfY6co+gxnQ6XYba9KbMOsZ00f97HArNmYYxSYieGlo3AdUUNriShYJIw\nUQDaMwOmNUDUeztUgP+ihssi0w82Gbg9PC/LzBhEaaE17tF2KJPAIxXobZDCnpal\n8M/0z2NEaJ5yi0e1gj7T+m+/9zzWpKYTYPJztTwBrC6ND89t40WOOjwnQoGCEbVL\n0sIbTeuRAgMBAAECggEAELQN+2+l4W9ulrdYMT0Bjvmv0rN2Rt82D2wAQ4aRLjZr\nNr9mK73q2Tz6s67J5kMzEqbwo50ZqJ5hGPFrthlF6TSgSPP1YJT3bSlI+HVui/Py\nNe8kX3vkyBmrF3RZ0PRCyp+Hx4PS9YQbPIg/cPoinuMUJVGSkh3A3ryE4/4SUWYP\n+2Rowgb+dnvBusTUfhIs73mlcK9MM3VhP6Wu/q4hn4XMgw1Vd3bPAU2r4Gd0XiyG\n4GVqRDaeu9/K7rbV5o3koa4cBZ7suITLeH8Nk43r0g4wOzZ7fd4QbJGySYanUyaD\nCY9EguQGA6ULvr0FJifDj+5qeaVjzLoGooOOapsnPQKBgQD3DTm8QkoqrmJLeWPs\naOIbOhVxEqMCuOwJmv7jNgCahgZiLD8TF70+5CSbvkciFLthtebRifdAgbaDf9eg\n7uztGK7GIbrdjr+JmT0HwU9Tb6RJ4ouqv/x4UtxWda1GFIFG3PkLTd8jYXnNIXjn\nxnxF2nunQKbR9dRBWYY6BlWiPwKBgQDfVq8eNk4oX5P70Y44jOl4vf2YfNiVWDie\nTk4zzPeTB1AVgPp0ghst9nLcEl860jCRp+4OyhQAT4A32GByCIdZDdZPsF824otU\nwmGFCG4zNzRp3O3I/oRMi8wMhuCG7C7av4nr+oM8yCnxiPyTHkIrA6KjNlp9yycO\nNGs7G35eLwKBgQDcZX4WRwUnYn7qWhcctszQAVdTko6+RP696vps9KZBNEPJnTN/\n8vOvgZRvJKcM7nXkS4Tpdi2P7KhIU+qn9b6EHjr9IuYz9b9GH+DkZD5CbxyflW2I\nHNI8/Z73uu+jz3MtJsE+pm/kfndM2wmjq9z97FXX9cNdF/QNgLJQXYpTvQKBgGnw\nZWrQWayfAcQud+btOIYUoSlm9xmIWnsFK+U4catliaBZqPQBD0FzKLKpaFCviWhe\nHvcW9fvbujdDRSRyVTlx7dmpENEpDuxqs/V1tUhIBG2+5XA1Aq6IlYbPp8t4VxVe\nS98K2pvHWtX+o8hpTvu2YrxGuQ/4gJMlXEQSW5PzAoGBAIgaujPRT5d7lPSnHra3\nF1du9tE9kBc93C0z66s3mTn7zBtQE11QZHr4EtYLZ5rN33oyA9C6hbmJGzhZCiah\n94Awm4iBkTP8JoyBVK1+kElUWNIPmsWNOdcksQXcRMeulAsiV3q90x2oh6m+m6Eb\nDFEvlPMJffOsFdgpYzw0LEwU\n-----END PRIVATE KEY-----`;
 
 const serviceAccount = {
@@ -111,7 +110,6 @@ async function useFirebaseAuthState(sessionId) {
 // 🔥 CREATE BOT
 // =======================
 async function createBot(sessionId) {
-
     if (sessions[sessionId]) return sessions[sessionId];
 
     const { state, saveCreds } = await useFirebaseAuthState(sessionId);
@@ -119,7 +117,7 @@ async function createBot(sessionId) {
     const sock = makeWASocket({
         auth: state,
         logger: pino({ level: 'silent' }),
-        browser:['Ubuntu', 'Chrome', '20.0.0'] // Updated to prevent bans
+        browser:['Ubuntu', 'Chrome', '20.0.0']
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -188,7 +186,6 @@ app.post('/pair', async (req, res) => {
         const sessionId = `${uid}_${clean}`;
 
         const exists = await db.ref(`numbers/${clean}`).get();
-        // Allow re-pairing if the uid matches
         if (exists.exists() && exists.val().uid !== uid) {
             return res.json({
                 success: false,
@@ -198,25 +195,22 @@ app.post('/pair', async (req, res) => {
 
         console.log(`📱 Pairing: ${clean}`);
 
-        // Close any stuck previous connection memory
+        // 🔥 1. CLEAR OLD SOCKET MEMORY
         if (sessions[sessionId]) {
             try { sessions[sessionId].ws?.close(); } catch(e) {}
             delete sessions[sessionId];
         }
 
+        // 🔥 2. CLEAR OLD DATABASE SESSION (CRITICAL FIX FOR PAIRING ERROR)
+        await db.ref(`sessions/${sessionId}`).remove();
+
+        // 🔥 3. CREATE FRESH CONNECTION
         const sock = await createBot(sessionId);
 
-        // Wait socket ready with Timeout to prevent freeze
-        await new Promise((resolve) => {
-            const timeout = setTimeout(resolve, 5000);
-            sock.ev.once('connection.update', () => {
-                clearTimeout(timeout);
-                resolve();
-            });
-        });
+        // 🔥 4. WAIT 3 SECONDS FOR WA WEBSOCKET TO BE READY
+        await new Promise(r => setTimeout(r, 3000));
 
-        await new Promise(r => setTimeout(r, 2000));
-
+        // 🔥 5. REQUEST NEW PAIRING CODE
         let code = await sock.requestPairingCode(clean);
         console.log(`✅ CODE: ${code}`);
 
@@ -230,10 +224,19 @@ app.post('/pair', async (req, res) => {
         });
 
     } catch (err) {
-        console.log("PAIR ERROR:", err.message);
+        // 🔥 ERROR LOGGING TO TERMINAL
+        console.log("PAIR ERROR LOG:", err.message);
+        
+        let errorMsg = "Try again after 1 minute";
+        if (err.message.includes('rate-overlimit')) {
+            errorMsg = "Rate limit! Try again after 5 mins.";
+        } else if (err.message.includes('Connection Closed')) {
+            errorMsg = "Connection dropped. Try again.";
+        }
+
         return res.json({
             success: false,
-            msg: "Try again after 1 minute"
+            msg: errorMsg
         });
     }
 });
@@ -251,7 +254,6 @@ app.post('/remove', async (req, res) => {
 
         const sock = sessions[sessionId];
         if (sock) {
-            // Logout properly so WA servers drop the connection completely
             try { await sock.logout(); } catch (e) { sock.ws?.close(); }
             delete sessions[sessionId];
         }
