@@ -8,7 +8,7 @@ process.on('uncaughtException', (err) => {
 });
 
 process.on('unhandledRejection', (err) => {
-    console.log('💥 PROMISE ERROR:', err.message);
+    console.log('💥 PROMISE ERROR:', err?.message);
 });
 
 // =======================
@@ -85,11 +85,9 @@ async function useFirebaseAuthState(sessionId) {
                     for (const type in data) {
                         for (const id in data[type]) {
                             let value = data[type][id];
-
                             if (value instanceof Buffer) {
                                 value = value.toString('base64');
                             }
-
                             if (value) {
                                 await ref.child(`keys/${type}-${id}`).set(cleanData(value));
                             } else {
@@ -117,7 +115,7 @@ async function createBot(sessionId) {
     const sock = makeWASocket({
         auth: state,
         logger: pino({ level: 'silent' }),
-        browser:['Ubuntu', 'Chrome', '20.0.0']
+        browser: ['Ubuntu', 'Chrome', '20.0.0']
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -139,7 +137,7 @@ async function createBot(sessionId) {
             } else {
                 console.log(`❌ Logged out: ${sessionId}`);
                 delete sessions[sessionId];
-                await db.ref(`sessions/${sessionId}`).remove().catch(()=>{});
+                await db.ref(`sessions/${sessionId}`).remove().catch(() => {});
             }
         }
     });
@@ -172,30 +170,43 @@ app.get('/', (req, res) => {
 });
 
 // =======================
-// 🔥 PAIR (FINAL FIX)
+// 🔥 PAIR (FIXED - 40s timeout + connection open wait)
 // =======================
 app.post('/pair', async (req, res) => {
     try {
         let { uid, number } = req.body || {};
-        if (!uid || !number) return res.json({ success: false, msg: "Missing uid/number" });
+
+        if (!uid || !number) {
+            return res.json({ success: false, msg: "Missing uid/number" });
+        }
 
         const clean = number.replace(/[^0-9]/g, '');
         const sessionId = `${uid}_${clean}`;
 
+        // Check number not used by another account
         const exists = await db.ref(`numbers/${clean}`).get();
         if (exists.exists() && exists.val().uid !== uid) {
-            return res.json({ success: false, msg: "Number already connected ❌" });
+            return res.json({
+                success: false,
+                msg: "Number already connected to another account ❌"
+            });
         }
 
-        // Clear old session
+        console.log(`📱 Pairing: ${clean}`);
+
+        // 🔥 1. CLEAR OLD SOCKET
         if (sessions[sessionId]) {
-            try { sessions[sessionId].ws?.close(); } catch(e) {}
+            try { sessions[sessionId].ws?.close(); } catch (e) {}
             delete sessions[sessionId];
         }
+
+        // 🔥 2. CLEAR OLD FIREBASE SESSION
         await db.ref(`sessions/${sessionId}`).remove();
 
+        // 🔥 3. FRESH AUTH STATE
         const { state, saveCreds } = await useFirebaseAuthState(sessionId);
 
+        // 🔥 4. CREATE FRESH SOCKET
         const sock = makeWASocket({
             auth: state,
             logger: pino({ level: 'silent' }),
@@ -203,12 +214,13 @@ app.post('/pair', async (req, res) => {
         });
 
         sock.ev.on('creds.update', saveCreds);
-
         sessions[sessionId] = sock;
 
-        // ✅ Wait for connection OPEN then get code
+        // 🔥 5. WAIT FOR CONNECTION OPEN (40s timeout)
         const code = await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error("Connection timeout")), 15000);
+            const timeout = setTimeout(() => {
+                reject(new Error("Connection timeout"));
+            }, 40000); // ✅ 40 seconds
 
             sock.ev.on('connection.update', async (update) => {
                 const { connection, lastDisconnect } = update;
@@ -216,31 +228,59 @@ app.post('/pair', async (req, res) => {
                 if (connection === 'open') {
                     clearTimeout(timeout);
                     try {
+                        // ✅ Small wait after open to stabilize
+                        await new Promise(r => setTimeout(r, 1500));
                         const pairCode = await sock.requestPairingCode(clean);
+                        console.log(`✅ CODE for ${clean}: ${pairCode}`);
                         resolve(pairCode);
-                    } catch(e) {
+                    } catch (e) {
                         reject(e);
                     }
                 }
 
                 if (connection === 'close') {
                     clearTimeout(timeout);
-                    reject(new Error("Connection closed before pairing"));
+                    const reason = lastDisconnect?.error?.output?.statusCode;
+                    reject(new Error(`Connection closed. Reason: ${reason || 'unknown'}`));
                 }
             });
         });
 
+        // 🔥 6. SAVE DATA
         await db.ref(`numbers/${clean}`).set({ uid });
         await db.ref(`users/${uid}/numbers/${clean}`).set(true);
+
+        // 🔥 7. ATTACH RECONNECT HANDLER
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect } = update;
+            if (connection === 'close') {
+                const reason = lastDisconnect?.error?.output?.statusCode;
+                if (reason !== DisconnectReason.loggedOut) {
+                    console.log(`🔁 Reconnecting: ${sessionId}`);
+                    delete sessions[sessionId];
+                    setTimeout(() => createBot(sessionId), 4000);
+                } else {
+                    console.log(`❌ Logged out: ${sessionId}`);
+                    delete sessions[sessionId];
+                    await db.ref(`sessions/${sessionId}`).remove().catch(() => {});
+                }
+            }
+        });
 
         return res.json({ success: true, code });
 
     } catch (err) {
         console.log("PAIR ERROR:", err.message);
+
         let errorMsg = "Try again after 1 minute";
-        if (err.message.includes('rate-overlimit')) errorMsg = "Rate limit! Try again after 5 mins.";
-        else if (err.message.includes('Connection Closed')) errorMsg = "Connection dropped. Try again.";
-        else if (err.message.includes('timeout')) errorMsg = "Connection timeout. Try again.";
+        if (err.message.includes('rate-overlimit')) {
+            errorMsg = "Rate limit! Try again after 5 mins ⏳";
+        } else if (err.message.includes('Connection closed')) {
+            errorMsg = "Connection dropped. Try again 🔄";
+        } else if (err.message.includes('timeout')) {
+            errorMsg = "Server busy. Try again in 30 seconds ⏳";
+        }
+
         return res.json({ success: false, msg: errorMsg });
     }
 });
