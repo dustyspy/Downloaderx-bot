@@ -177,67 +177,71 @@ app.get('/', (req, res) => {
 app.post('/pair', async (req, res) => {
     try {
         let { uid, number } = req.body || {};
-
-        if (!uid || !number) {
-            return res.json({ success: false, msg: "Missing uid/number" });
-        }
+        if (!uid || !number) return res.json({ success: false, msg: "Missing uid/number" });
 
         const clean = number.replace(/[^0-9]/g, '');
         const sessionId = `${uid}_${clean}`;
 
         const exists = await db.ref(`numbers/${clean}`).get();
         if (exists.exists() && exists.val().uid !== uid) {
-            return res.json({
-                success: false,
-                msg: "Number already connected to another account ❌"
-            });
+            return res.json({ success: false, msg: "Number already connected ❌" });
         }
 
-        console.log(`📱 Pairing: ${clean}`);
-
-        // 🔥 1. CLEAR OLD SOCKET MEMORY
+        // Clear old session
         if (sessions[sessionId]) {
             try { sessions[sessionId].ws?.close(); } catch(e) {}
             delete sessions[sessionId];
         }
-
-        // 🔥 2. CLEAR OLD DATABASE SESSION (CRITICAL FIX FOR PAIRING ERROR)
         await db.ref(`sessions/${sessionId}`).remove();
 
-        // 🔥 3. CREATE FRESH CONNECTION
-        const sock = await createBot(sessionId);
+        const { state, saveCreds } = await useFirebaseAuthState(sessionId);
 
-        // 🔥 4. WAIT 3 SECONDS FOR WA WEBSOCKET TO BE READY
-        await new Promise(r => setTimeout(r, 3000));
+        const sock = makeWASocket({
+            auth: state,
+            logger: pino({ level: 'silent' }),
+            browser: ['Ubuntu', 'Chrome', '20.0.0']
+        });
 
-        // 🔥 5. REQUEST NEW PAIRING CODE
-        let code = await sock.requestPairingCode(clean);
-        console.log(`✅ CODE: ${code}`);
+        sock.ev.on('creds.update', saveCreds);
 
-        // Save Data
+        sessions[sessionId] = sock;
+
+        // ✅ Wait for connection OPEN then get code
+        const code = await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error("Connection timeout")), 15000);
+
+            sock.ev.on('connection.update', async (update) => {
+                const { connection, lastDisconnect } = update;
+
+                if (connection === 'open') {
+                    clearTimeout(timeout);
+                    try {
+                        const pairCode = await sock.requestPairingCode(clean);
+                        resolve(pairCode);
+                    } catch(e) {
+                        reject(e);
+                    }
+                }
+
+                if (connection === 'close') {
+                    clearTimeout(timeout);
+                    reject(new Error("Connection closed before pairing"));
+                }
+            });
+        });
+
         await db.ref(`numbers/${clean}`).set({ uid });
         await db.ref(`users/${uid}/numbers/${clean}`).set(true);
 
-        return res.json({
-            success: true,
-            code
-        });
+        return res.json({ success: true, code });
 
     } catch (err) {
-        // 🔥 ERROR LOGGING TO TERMINAL
-        console.log("PAIR ERROR LOG:", err.message);
-        
+        console.log("PAIR ERROR:", err.message);
         let errorMsg = "Try again after 1 minute";
-        if (err.message.includes('rate-overlimit')) {
-            errorMsg = "Rate limit! Try again after 5 mins.";
-        } else if (err.message.includes('Connection Closed')) {
-            errorMsg = "Connection dropped. Try again.";
-        }
-
-        return res.json({
-            success: false,
-            msg: errorMsg
-        });
+        if (err.message.includes('rate-overlimit')) errorMsg = "Rate limit! Try again after 5 mins.";
+        else if (err.message.includes('Connection Closed')) errorMsg = "Connection dropped. Try again.";
+        else if (err.message.includes('timeout')) errorMsg = "Connection timeout. Try again.";
+        return res.json({ success: false, msg: errorMsg });
     }
 });
 
